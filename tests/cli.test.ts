@@ -69,6 +69,37 @@ describe('lunar (default command)', () => {
   })
 })
 
+describe('lunar --engineer (Phase 3 flags)', () => {
+  it('passes --engineer through with a task', async () => {
+    const { program, captured } = makeProgram()
+    await program.parseAsync(['add', 'a', 'health', 'endpoint', '--engineer'], { from: 'user' })
+    expect(captured.runs[0]).toMatchObject({
+      task: 'add a health endpoint',
+      engineer: true,
+    })
+  })
+
+  it('passes --yes through for trusted mode', async () => {
+    const { program, captured } = makeProgram()
+    await program.parseAsync(['do', 'it', '--engineer', '--yes'], { from: 'user' })
+    expect(captured.runs[0]).toMatchObject({ engineer: true, yes: true })
+  })
+
+  it('leaves engineer and yes unset by default', async () => {
+    const { program, captured } = makeProgram()
+    await program.parseAsync(['explain', 'this'], { from: 'user' })
+    expect(captured.runs[0]?.engineer).toBeUndefined()
+    expect(captured.runs[0]?.yes).toBeUndefined()
+  })
+
+  it('does not leak --engineer into the doctor subcommand', async () => {
+    const { program, captured } = makeProgram()
+    await program.parseAsync(['doctor'], { from: 'user' })
+    expect(captured.doctors).toHaveLength(1)
+    expect(captured.runs).toHaveLength(0)
+  })
+})
+
 describe('lunar doctor', () => {
   it('routes to the doctor handler, not run', async () => {
     const { program, captured } = makeProgram()

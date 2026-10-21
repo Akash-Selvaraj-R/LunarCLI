@@ -12,13 +12,14 @@ language; Lunar reasons about it with a configured LLM, shows its answer
 as it streams, and (in later phases) will inspect your repository, plan
 the work, edit files, run tests, and verify the result.
 
-> **Status: Phase 2 — Engineering Tools.**
-> Lunar can hold real conversations with a configured LLM provider and
-> now **inspect your project through structured, read-only tools** —
-> list directories, read files, search text, find files, and inspect
-> git state — with a multi-turn tool loop, permission gating, and
-> workspace boundaries. It **cannot** execute commands or modify
-> anything; those tools do not exist. See [Roadmap](#roadmap).
+> **Status: Phase 3 — Autonomous Engineering Loop.**
+> Lunar can inspect your project with structured, read-only tools AND,
+> in explicit `--engineer` mode, run a **bounded autonomous loop**: it
+> plans the change, proposes structured file edits, shows you a diff,
+> asks for approval, applies atomically, runs controlled verification,
+> and — on failure — diagnoses and proposes a fix. Git commit/push and
+> unrestricted network access are **not implemented**. See
+> [Roadmap](#roadmap).
 
 ## Vision
 
@@ -41,78 +42,108 @@ lunar "fix the authentication bug and make sure all tests pass"
 and have Lunar do the work — safely, transparently, and inside your
 existing terminal workflow.
 
-## Current Status (Phase 2 — Engineering Tools)
+## Current Status (Phase 3 — Autonomous Engineering Loop)
 
 Implemented:
 
-- Interactive conversation with a configured LLM provider
-  (`lunar` → `lunar › …`, streamed responses) and one-shot mode
-  (`lunar "explain this project"`)
-- **Tool calling**: the model can request read-only inspection tools,
-  Lunar validates and executes them, results go back to the model, and
-  the model continues reasoning — multiple tool rounds per request,
-  hard-capped (20 rounds) so a loop can never run away
-- **Filesystem inspection**: `list_directory`, `read_file` (with line
-  ranges and size limits), `file_exists`
-- **Search**: `search_files` (fixed-string; ripgrep when installed,
-  controlled Node fallback otherwise) and `find_files` (glob or name
-  substring) — both workspace-bounded and result-capped
-- **Git inspection**: `git_status`, `git_diff` (size-capped with
-  truncation notice), `git_log` (bounded), `git_branch` — read-only,
-  via a fixed-argument adapter that never uses a shell
-- **Permission system**: every tool carries a risk level
-  (safe/read-only/mutating/dangerous); a centralized
-  `PermissionManager` allows safe+read-only and denies
-  mutating+dangerous
-- **Workspace path security**: realpath-based containment checks that
-  stop `../` traversal, absolute-path escapes, foreign Windows drives,
-  and symlink/junction escapes
-- Tool activity is visible in the terminal (`◇ tool` / `✓ result`);
-  `--debug` shows per-tool arguments (redacted), duration, and result
-  size
-- Tool failures are structured (`file_not_found`, `invalid_input`,
-  `path_outside_workspace`, …) and become tool results the model can
-  react to — a failing tool never crashes the agent
-- Provider tool formats (OpenAI `tool_calls`, Anthropic
-  `tool_use`/`tool_result`, Gemini `functionCall`/`functionResponse`)
-  are mapped inside provider adapters only
-- Everything from Phase 1: streaming, cancellation (Ctrl+C during model
-  requests _and_ tool execution), conversation history, structured
-  errors, secret redaction, deterministic tests
+- Everything from Phase 2: multi-turn tool loop with read-only tools
+  (`list_directory`, `read_file`, `search_files`, `find_files`,
+  `git_status`, `git_diff`, `git_log`, `git_branch`), permission
+  system, workspace path security
+- **Structured plans**: the model produces a Zod-validated
+  `EngineeringPlan` (goal + steps) before anything happens; invalid
+  output is a controlled error, not prose
+- **Proposed changes**: the model proposes `FileChange`s
+  (`create`/`update`/`delete` with path, content, reason) as JSON —
+  it never writes files itself
+- **Change validation**: workspace-boundary path checks (traversal,
+  absolute escapes, symlink escapes), existence rules (update/delete
+  must exist, create must not overwrite), `oldContent` conflict
+  detection, per-file and per-proposal size caps
+- **Diff preview**: unified diffs (LCS-based, bounded) shown before
+  any mutation
+- **Mutation approval**: nothing is applied without an explicit human
+  decision (`Apply changes? [y/N]`); `--yes` enables a trusted
+  auto-approve mode; deletes are called out as irreversible
+- **Atomic mutation**: temp file → write → rename; stop-on-first-error;
+  single files only (no directory deletion)
+- **Controlled command execution**: structured `executable + args[]`
+  requests — allowlisted bare executables, no shell, workspace-bound
+  cwd, hard timeouts with process kill, bounded stdout/stderr capture
+- **Test runner**: repository-aware command detection (`npm test`,
+  `cargo test`, `go test ./...`, `pytest`, `make test`), structured
+  results (exit code, pass/fail counts when parseable, duration) with
+  raw output preserved for diagnosis
+- **Verification**: applied changes are confirmed on disk and the test
+  command must pass — a successful file write alone is not success
+- **Failure diagnosis & bounded retry**: on verification failure the
+  model diagnoses (structured, Zod-validated) and proposes a fix that
+  re-enters PROPOSE → VALIDATE → APPROVE → APPLY; the loop stops after
+  `maxIterations` (default 3) — never `while (true)`
+- **Hard limits everywhere**: iterations, mutations per task, command
+  executions, command duration, output size, file size — enforced in
+  code, configurable in `config.json`
+- **Observability**: every phase, approval, mutation, and command
+  execution emits an event (with duration), visible with `--debug`
+
+### Usage
+
+```bash
+lunar "explain this project"           # one-shot Q&A (unchanged)
+lunar "add a health endpoint" --engineer   # autonomous loop (asks before editing)
+lunar "add a health endpoint" --engineer --yes  # trusted mode: no prompts
+```
+
+### The loop
+
+```text
+PLAN → PROPOSE → VALIDATE → PERMISSION → APPLY → DIFF → TEST/VERIFY
+                                                          │
+                              FAIL → DIAGNOSE → FIX ──────┘ (bounded)
+```
+
+### Phase 3 limits (defaults; all configurable)
+
+```text
+maxIterations            3    corrective attempts per task
+maxMutations            20    file writes per task
+maxCommands             10    command executions per task
+commandTimeoutMs   120000    hard kill after 2 minutes
+maxOutputBytes      128000    per stream (stdout/stderr)
+maxFileBytes        262144    per mutated file
+maxChangesPerProposal   10    per proposal
+jsonRetries              2    extra attempts on invalid model JSON
+```
 
 ### Tools
 
-| Tool                           | Risk      | Status       |
-| ------------------------------ | --------- | ------------ |
-| `list_directory`               | safe      | enabled      |
-| `read_file`                    | read-only | enabled      |
-| `file_exists`                  | safe      | enabled      |
-| `search_files`                 | safe      | enabled      |
-| `find_files`                   | safe      | enabled      |
-| `git_status`                   | safe      | enabled      |
-| `git_diff`                     | read-only | enabled      |
-| `git_log`                      | safe      | enabled      |
-| `git_branch`                   | read-only | enabled      |
-| shell / `run_command`          | dangerous | **disabled** |
-| `write_file` / `edit_file`     | mutating  | **disabled** |
-| `delete_file`                  | mutating  | **disabled** |
-| git commit/push/checkout/reset | dangerous | **disabled** |
+| Tool                           | Risk      | Status                              |
+| ------------------------------ | --------- | ----------------------------------- |
+| `list_directory`               | safe      | enabled                             |
+| `read_file`                    | read-only | enabled                             |
+| `file_exists`                  | safe      | enabled                             |
+| `search_files`                 | safe      | enabled                             |
+| `find_files`                   | safe      | enabled                             |
+| `git_status`                   | safe      | enabled                             |
+| `git_diff`                     | read-only | enabled                             |
+| `git_log`                      | safe      | enabled                             |
+| `git_branch`                   | read-only | enabled                             |
+| file create/update/delete      | mutating  | via `--engineer` **after approval** |
+| shell / `run_command`          | dangerous | **not registered** (allowlisted cmds only) |
+| git commit/push/checkout/reset | dangerous | **not implemented**                 |
 
-Disabled tools do not exist as registered tools at all: a model that
-requests one receives a structured "unknown tool" result, and nothing
-happens on your machine.
+Mutations are not registered tools the model can call. They are
+structured proposals that pass validation → permission → human
+approval before a single byte is written.
 
-### Phase 2 limits (deliberate)
+### Phase 3 boundaries (deliberate)
 
 ```text
-Lunar can:  list/read/search files in the workspace, inspect git state
-Lunar can't: run commands, write/edit/delete files, mutate git
+Lunar can:  inspect the repo, plan, propose edits, apply approved
+            edits atomically, run allowlisted verification commands
+Lunar can't: commit/push git, run arbitrary shell, access the network,
+             delete directories, mutate anything without approval
 ```
-
-The model receives only the workspace identity (path, git repo/branch),
-the conversation, and the output of tools it invoked — all resolved
-inside the workspace. There is no LLM → shell and no LLM → filesystem
-mutation path of any kind. See [docs/architecture/security.md](docs/architecture/security.md).
 
 ## Installation
 
@@ -130,13 +161,15 @@ npm link        # makes `lunar` available on your PATH
 ## Usage
 
 ```bash
-lunar                       # interactive terminal UI
-lunar "explain this project" # one-shot: answer a single question
-lunar --help                # usage
-lunar --version             # version
-lunar --debug               # verbose diagnostics (incl. tool timings)
-lunar --cwd <path>          # operate in a different directory
-lunar doctor                # installation health check
+lunar                                # interactive terminal UI
+lunar "explain this project"         # one-shot: answer a single question
+lunar "add a /health endpoint" --engineer   # autonomous engineering loop
+lunar "add a /health endpoint" --engineer --yes  # trusted mode (no prompts)
+lunar --help                         # usage
+lunar --version                      # version
+lunar --debug                        # verbose diagnostics (timings, args)
+lunar --cwd <path>                   # operate in a different directory
+lunar doctor                         # installation health check
 ```
 
 Example interactive session (Phase 2):
@@ -187,9 +220,19 @@ Example `~/.lunar/config.json`:
 {
   "provider": "openai",
   "model": "gpt-5",
-  "debug": false
+  "debug": false,
+  "engineering": {
+    "maxIterations": 3,
+    "maxMutations": 20,
+    "maxCommands": 10,
+    "allowedCommands": ["npm", "node"]
+  }
 }
 ```
+
+The optional `engineering` section tunes the Phase 3 loop limits (see
+[Phase 3 limits](#phase-3-limits-defaults-all-configurable)). Unknown
+keys are rejected so typos surface as errors.
 
 API keys belong in your environment or an untracked config file — LunarCLI
 never logs secrets and no keys are committed to this repository.
@@ -204,6 +247,8 @@ src/
 ├── app/          Interactive application root (Ink)
 ├── ui/           Terminal UI components, theme, styles
 ├── agent/        Agent runtime: loop, context, system prompt, events
+├── engineering/  Phase 3: plan, changes, diff, mutation, command,
+│                 test-runner, verification, approval, retry, loop
 ├── conversation/ In-memory conversation history (session-backed)
 ├── domain/       Types, errors, models — the stable contract
 ├── config/       Zod schema, defaults, layered config loader
@@ -216,9 +261,10 @@ src/
 └── utils/        Small shared helpers
 
 docs/architecture/
-├── agent-loop.md The tool-call loop and its invariants
-├── tools.md      Tool anatomy, the Phase 2 tool set, limits
-└── security.md   Threat model, layered defenses, path security
+├── agent-loop.md       The tool-call loop and its invariants
+├── tools.md            Tool anatomy, the Phase 2 tool set, limits
+├── engineering-loop.md Phase 3: plan → propose → approve → verify
+└── security.md         Threat model, layered defenses, path security
 ```
 
 Dependency rule: `cli` and `app` depend on `domain`/`config`/`providers`/`agent`;
@@ -281,17 +327,22 @@ Phase 2 — Engineering Tools        ✓
 [x] Permission system (risk classification)
 [x] Workspace path security
 
-Phase 3 — Autonomous Loop
-[ ] Observe → Act → Verify loop
-[ ] Failure recovery
-[ ] Automatic debugging
-[ ] Task completion verification
+Phase 3 — Autonomous Loop            ✓
+[x] Structured plan generation (Zod-validated)
+[x] Proposed file changes (create/update/delete)
+[x] Diff preview (unified, bounded)
+[x] Mutation approval (prompt / --yes / deny)
+[x] Atomic file mutation (temp → rename)
+[x] Controlled command execution (allowlist, no shell)
+[x] Repository-aware test runner
+[x] Verification (filesystem + tests)
+[x] Failure diagnosis (structured, re-enters the loop)
+[x] Bounded retry + hard limits
 
 Phase 4 — Safety
-[ ] Permission engine
-[ ] Command risk classification
-[ ] Approval flows
+[ ] Command risk classification (per-command, not per-executable)
 [ ] Sandboxed execution
+[ ] Interactive permission rules (allowlist per project)
 
 Phase 5 — Memory & Sessions
 [ ] Session persistence

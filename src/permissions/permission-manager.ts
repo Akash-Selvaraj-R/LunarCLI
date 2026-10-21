@@ -28,6 +28,31 @@ export const PHASE2_POLICY: Readonly<Record<ToolRisk, PermissionDecision>> = {
   [ToolRisk.DANGEROUS]: 'deny',
 }
 
+/**
+ * Phase 3 policies for MUTATIONS (the engineering loop gate).
+ *
+ * The loop's proposals are NOT tools — they are structured changes the
+ * loop validates and then takes through this same centralized risk
+ * system. 'ask' is the default: nothing mutates without an explicit
+ * human decision. PHASE3_AUTO_POLICY exists ONLY for an explicit
+ * `--yes` trusted mode; DANGEROUS stays denied in both (Phase 3 has no
+ * legitimate dangerous operation).
+ */
+export const PHASE3_ASK_POLICY: Readonly<Record<ToolRisk, PermissionDecision>> = {
+  [ToolRisk.SAFE]: 'allow',
+  [ToolRisk.READ_ONLY]: 'allow',
+  [ToolRisk.MUTATING]: 'ask',
+  [ToolRisk.DANGEROUS]: 'deny',
+}
+
+/** Trusted mode (`--yes`): mutations auto-approved, dangerous still denied. */
+export const PHASE3_AUTO_POLICY: Readonly<Record<ToolRisk, PermissionDecision>> = {
+  [ToolRisk.SAFE]: 'allow',
+  [ToolRisk.READ_ONLY]: 'allow',
+  [ToolRisk.MUTATING]: 'allow',
+  [ToolRisk.DANGEROUS]: 'deny',
+}
+
 export interface PermissionCheck {
   /** Tool name, e.g. "read_file". */
   readonly tool: string

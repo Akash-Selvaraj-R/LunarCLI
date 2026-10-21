@@ -70,12 +70,17 @@ function loadConfigFile(configPath: string): LunarConfigInput {
     throw new ConfigurationError(`Configuration file must contain a JSON object: ${configPath}`)
   }
 
-  const { debug, provider, model, apiKey } = parsed as Record<string, unknown>
+  const { debug, provider, model, apiKey, engineering } = parsed as Record<string, unknown>
   return {
     ...(typeof debug === 'boolean' ? { debug } : {}),
     ...(typeof provider === 'string' ? { provider } : {}),
     ...(typeof model === 'string' ? { model } : {}),
     ...(typeof apiKey === 'string' ? { apiKey } : {}),
+    // Passed through as-is (cast): the schema validates the section and
+    // rejects wrong types with a precise error instead of silence.
+    ...(engineering !== undefined
+      ? { engineering: engineering as LunarConfigInput['engineering'] }
+      : {}),
   }
 }
 
@@ -100,6 +105,7 @@ function definedOnly(input: LunarConfigInput): LunarConfigInput {
   if (input.model !== undefined) result.model = input.model
   if (input.apiKey !== undefined) result.apiKey = input.apiKey
   if (input.debug !== undefined) result.debug = input.debug
+  if (input.engineering !== undefined) result.engineering = input.engineering
   return result
 }
 
@@ -120,6 +126,11 @@ export function loadConfig(options: LoadConfigOptions = {}): LunarConfig {
     ...definedOnly(fileConfig),
     ...envConfig,
     ...cliConfig,
+    // The engineering section merges per key (CLI wins over file) so a
+    // single `--engineer` flag never wipes configured limits.
+    ...(fileConfig.engineering !== undefined || cliConfig.engineering !== undefined
+      ? { engineering: { ...fileConfig.engineering, ...cliConfig.engineering } }
+      : {}),
   }
 
   return validateConfig(merged)

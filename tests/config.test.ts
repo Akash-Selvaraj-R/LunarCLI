@@ -148,3 +148,53 @@ describe('describeConfig (secret redaction)', () => {
     expect(JSON.stringify(described)).not.toContain('sk-super-secret')
   })
 })
+
+describe('engineering limits (Phase 3)', () => {
+  it('is absent when nothing is configured', () => {
+    const config = loadConfig({ env: {}, configPath: missingConfig })
+    expect(config.engineering).toBeUndefined()
+  })
+
+  it('reads the engineering section from the config file', () => {
+    const file = writeConfigFile(
+      JSON.stringify({ debug: false, engineering: { maxIterations: 5, maxCommands: 4 } }),
+    )
+    const config = loadConfig({ env: {}, configPath: file })
+    expect(config.engineering).toEqual({ maxIterations: 5, maxCommands: 4 })
+  })
+
+  it('lets CLI values win per key over the file (nested merge)', () => {
+    const file = writeConfigFile(
+      JSON.stringify({ engineering: { maxIterations: 5, maxCommands: 4 } }),
+    )
+    const config = loadConfig({
+      env: {},
+      cli: { engineering: { maxIterations: 2 } },
+      configPath: file,
+    })
+    expect(config.engineering).toEqual({ maxIterations: 2, maxCommands: 4 })
+  })
+
+  it('rejects out-of-range limits', () => {
+    expect(() => validateConfig({ engineering: { maxIterations: 0 } })).toThrow(
+      ConfigurationError,
+    )
+    expect(() => validateConfig({ engineering: { maxIterations: 100 } })).toThrow(
+      ConfigurationError,
+    )
+    expect(() => validateConfig({ engineering: { commandTimeoutMs: 10 } })).toThrow(
+      ConfigurationError,
+    )
+  })
+
+  it('rejects unknown engineering keys (strict schema)', () => {
+    expect(() => validateConfig({ engineering: { maxRetriesForever: 99 } })).toThrow(
+      ConfigurationError,
+    )
+  })
+
+  it('accepts an allowlist of executables', () => {
+    const config = validateConfig({ engineering: { allowedCommands: ['npm', 'node'] } })
+    expect(config.engineering?.allowedCommands).toEqual(['npm', 'node'])
+  })
+})

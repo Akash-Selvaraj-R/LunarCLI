@@ -20,6 +20,10 @@ export interface CliOptions {
 export interface RunOptions extends CliOptions {
   /** Task text supplied as positional arguments, if any. */
   task?: string
+  /** Run the task through the autonomous engineering loop (Phase 3). */
+  engineer?: true
+  /** Auto-approve mutations (trusted mode — no approval prompt). */
+  yes?: true
 }
 
 export interface CliHandlers {
@@ -35,7 +39,10 @@ function withGlobalOptions(command: Command, options: { cwdDefault?: string } = 
     options.cwdDefault === undefined
       ? command.option('--cwd <path>', 'working directory to operate in')
       : command.option('--cwd <path>', 'working directory to operate in', options.cwdDefault)
-  return withCwd.option('--debug', 'enable debug diagnostics')
+  return withCwd
+    .option('--debug', 'enable debug diagnostics')
+    .option('--engineer', 'run the task through the autonomous engineering loop (modifies files)')
+    .option('--yes', 'auto-approve file changes (with --engineer; no approval prompt)')
 }
 
 /** Build the `lunar` program. */
