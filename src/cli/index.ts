@@ -15,7 +15,9 @@ import { fileURLToPath } from 'node:url'
 import { describeConfig, loadConfig } from '../config/config.js'
 import { LunarError } from '../domain/errors/index.js'
 import { createLogger } from '../logging/logger.js'
+import { resolveProvider } from '../providers/resolve.js'
 import { detectWorkspace } from '../workspace/detector.js'
+import { AgentRuntime } from '../agent/runtime.js'
 import { printError } from './output.js'
 import { buildProgram } from './program.js'
 import { runDoctor } from './commands/doctor.js'
@@ -46,10 +48,23 @@ async function main(): Promise<void> {
       logger.debug('Configuration loaded', { config: describeConfig(config) })
       logger.debug('Workspace detected', { root: workspace.root, git: workspace.git })
 
+      // Resolve the provider before launching so configuration problems
+      // surface as a clear, actionable error (no half-started UI).
+      const resolved = resolveProvider(config)
+      logger.debug('Provider resolved', { provider: resolved.provider.id, model: resolved.model })
+
+      const agent = new AgentRuntime({
+        provider: resolved.provider,
+        model: resolved.model,
+        workspace,
+        logger,
+        version,
+      })
+
       if (task !== undefined) {
-        await runTask({ task, config, workspace, version })
+        await runTask({ task, config, workspace, version, logger, agent })
       } else {
-        await runInteractive({ config, workspace, version, logger })
+        await runInteractive({ config, workspace, version, logger, agent })
       }
     },
     doctor: async ({ debug, cwd }) => {

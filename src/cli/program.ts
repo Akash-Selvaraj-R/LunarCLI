@@ -47,7 +47,7 @@ export function buildProgram(version: string, handlers: CliHandlers): Command {
       .name('lunar')
       .description('LunarCLI — AI engineering agent for your terminal.')
       .version(version, '-V, --version', 'output the version number')
-      .argument('[task...]', 'task for the agent (execution arrives in Phase 1)'),
+      .argument('[task...]', 'one-shot task for the agent (e.g. lunar "explain this project")'),
     { cwdDefault: process.cwd() },
   ).action(async (taskParts: string[], options: RunOptions) => {
     const task = taskParts.join(' ')

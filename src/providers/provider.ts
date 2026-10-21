@@ -1,18 +1,25 @@
-import { NotImplementedError, ProviderError } from '../domain/errors/index.js'
+import { ProviderError } from '../domain/errors/index.js'
 
-import type { LLMProvider, LLMRequest, LLMResponse, ProviderOptions } from './types.js'
+import type {
+  LLMProvider,
+  LLMRequest,
+  LLMResponse,
+  ProviderCallOptions,
+  ProviderOptions,
+} from './types.js'
 
 /**
  * Shared provider scaffolding.
  *
  * `BaseProvider` handles request validation so concrete providers only
- * need to care about their transport. Phase 1 replaces the stubbed
- * `generate` implementations with real SDK calls.
+ * need to care about their transport.
  */
 export abstract class BaseProvider implements LLMProvider {
   abstract readonly id: string
   abstract readonly name: string
   abstract readonly models: readonly string[]
+  abstract readonly defaultModel: string
+  abstract readonly requiresApiKey: boolean
 
   protected readonly options: ProviderOptions
 
@@ -30,12 +37,5 @@ export abstract class BaseProvider implements LLMProvider {
     }
   }
 
-  abstract generate(request: LLMRequest): Promise<LLMResponse>
-}
-
-/** Standard Phase 0 failure for providers without a real implementation. */
-export function notImplemented(providerId: string): never {
-  throw new NotImplementedError(`${providerId} provider is not implemented yet (Phase 1)`, {
-    hint: 'Provider integrations arrive in Phase 1. Configure a provider later with LUNAR_PROVIDER / LUNAR_MODEL.',
-  })
+  abstract generate(request: LLMRequest, options?: ProviderCallOptions): Promise<LLMResponse>
 }

@@ -1,0 +1,62 @@
+import { Box, Text } from 'ink'
+
+import { theme } from '../theme.js'
+
+/** One rendered line group in the conversation transcript. */
+export interface TranscriptEntry {
+  id: number
+  kind: 'user' | 'assistant' | 'error' | 'cancelled'
+  text: string
+  /** Optional actionable hint, shown dimmed under an error. */
+  hint?: string
+}
+
+export interface TranscriptLineProps {
+  entry: TranscriptEntry
+}
+
+/**
+ * A single transcript entry.
+ *
+ * Layout mirrors the Lunar aesthetic: the user speaks at the `lunar ›`
+ * prompt, the model answers as `Lunar ›`, failures show `✗` plus a hint.
+ */
+export function TranscriptLine({ entry }: TranscriptLineProps) {
+  if (entry.kind === 'user') {
+    return (
+      <Text>
+        {theme.brand('lunar')} {theme.dim('›')} {entry.text}
+      </Text>
+    )
+  }
+  if (entry.kind === 'assistant') {
+    return (
+      <Text>
+        {theme.brand('Lunar')} {theme.dim('›')} {entry.text}
+      </Text>
+    )
+  }
+  if (entry.kind === 'error') {
+    return (
+      <Box flexDirection="column">
+        <Text>
+          {theme.error('✗')} {entry.text}
+        </Text>
+        {entry.hint !== undefined && <Text>{theme.muted(entry.hint)}</Text>}
+      </Box>
+    )
+  }
+  return <Text>{theme.muted(entry.text)}</Text>
+}
+
+/**
+ * The in-flight indicator: `◐ thinking...` while waiting for the model,
+ * gone once the first streamed token arrives.
+ */
+export function ThinkingLine() {
+  return (
+    <Text>
+      {theme.brand('◐')} {theme.muted('thinking...')}
+    </Text>
+  )
+}

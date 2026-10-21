@@ -1,5 +1,8 @@
+import { AnthropicProvider } from './anthropic.js'
+import { GeminiProvider } from './gemini.js'
+import { MockProvider } from './mock.js'
+import { OpenAIProvider } from './openai.js'
 import { ProviderError } from '../domain/errors/index.js'
-import { AnthropicProvider, GeminiProvider, OpenAIProvider } from './stubs.js'
 import type { LLMProvider, ProviderOptions } from './types.js'
 
 /**
@@ -9,7 +12,8 @@ import type { LLMProvider, ProviderOptions } from './types.js'
  *              │
  *              ├── OpenAIProvider
  *              ├── AnthropicProvider
- *              └── GeminiProvider
+ *              ├── GeminiProvider
+ *              └── MockProvider (tests / keyless smoke runs)
  *
  * The registry is the only place that knows about concrete provider
  * classes. Application code resolves providers by id.
@@ -63,5 +67,6 @@ export function createDefaultRegistry(options: DefaultRegistryOptions = {}): Pro
   registry.register(new OpenAIProvider(providerOptions['openai'] ?? {}))
   registry.register(new AnthropicProvider(providerOptions['anthropic'] ?? {}))
   registry.register(new GeminiProvider(providerOptions['gemini'] ?? {}))
+  registry.register(new MockProvider())
   return registry
 }

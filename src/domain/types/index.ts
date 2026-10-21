@@ -59,6 +59,15 @@ export interface Model {
   readonly displayName: string
 }
 
+/** A tool invocation requested by the model. */
+export interface ToolCall {
+  readonly id: string
+  /** Registered tool name, e.g. "shell". */
+  readonly name: string
+  /** Parsed arguments (empty object when the model supplied none). */
+  readonly arguments: Record<string, unknown>
+}
+
 /** Result of invoking a tool on behalf of the agent. */
 export interface ToolResult {
   readonly toolCallId: string

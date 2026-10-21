@@ -26,3 +26,20 @@ export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
 }
+
+/** Patterns for secret-shaped substrings that may appear inside text. */
+const INLINE_SECRET_PATTERNS: RegExp[] = [
+  /\bsk-[A-Za-z0-9_-]{8,}\b/g, // OpenAI / Anthropic style keys
+  /\bAIza[0-9A-Za-z_-]{10,}\b/g, // Google API keys
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, // Authorization header values
+  /\bxox[a-z]-[A-Za-z0-9-]{8,}/gi, // Slack-style tokens
+]
+
+/** Scrub secret-shaped substrings out of free-form text (logs, errors). */
+export function redactText(text: string): string {
+  let result = text
+  for (const pattern of INLINE_SECRET_PATTERNS) {
+    result = result.replace(pattern, '[redacted]')
+  }
+  return result
+}

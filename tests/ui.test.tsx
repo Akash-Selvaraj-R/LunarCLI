@@ -2,8 +2,10 @@ import { renderToString } from 'ink'
 import { describe, expect, it } from 'vitest'
 
 import { App } from '../src/app/app.js'
+import { AgentRuntime } from '../src/agent/runtime.js'
 import type { LunarConfig } from '../src/config/schema.js'
 import { createSilentLogger } from '../src/logging/logger.js'
+import { MockProvider } from '../src/providers/mock.js'
 import type { Workspace } from '../src/domain/types/workspace.js'
 
 const workspace: Workspace = {
@@ -15,9 +17,22 @@ const workspace: Workspace = {
 
 const config: LunarConfig = { debug: false }
 
-function renderApp(appConfig: LunarConfig = config): string {
+function makeAgent(provider = new MockProvider()): AgentRuntime {
+  return new AgentRuntime({ provider, model: provider.defaultModel, workspace })
+}
+
+function renderApp(
+  appConfig: LunarConfig = config,
+  provider: MockProvider = new MockProvider(),
+): string {
   return renderToString(
-    <App config={appConfig} workspace={workspace} version="0.1.0" logger={createSilentLogger()} />,
+    <App
+      config={appConfig}
+      workspace={workspace}
+      version="0.1.0"
+      logger={createSilentLogger()}
+      agent={makeAgent(provider)}
+    />,
     { columns: 80 },
   )
 }
@@ -50,5 +65,18 @@ describe('App (initial screen)', () => {
     expect(output).toContain('enabled')
     expect(output).toContain('openai')
     expect(output).toContain('gpt-5')
+  })
+
+  it('starts idle — no transcript, no thinking indicator', () => {
+    const output = renderApp()
+    expect(output).not.toContain('thinking...')
+    expect(output).not.toContain('Lunar ›')
+    expect(output).not.toContain('Mock response')
+  })
+
+  it('disables interactive input when stdin is not a TTY', () => {
+    // Vitest runs without a TTY on stdin, so the static notice must show.
+    const output = renderApp()
+    expect(output).toContain('interactive input disabled')
   })
 })

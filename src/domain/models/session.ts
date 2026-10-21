@@ -21,6 +21,11 @@ export const SessionSchema = z.object({
   messages: z.array(MessageSchema),
 })
 
+/** Create a validated message with a fresh id and timestamp. */
+export function createMessage(role: Message['role'], content: string): Message {
+  return MessageSchema.parse({ id: randomUUID(), role, content, timestamp: Date.now() })
+}
+
 export interface CreateSessionOptions {
   workspaceRoot: string
   providerId?: string

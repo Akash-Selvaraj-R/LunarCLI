@@ -64,9 +64,16 @@ export async function runDoctor(options: DoctorOptions): Promise<void> {
     stdout(infoRow('LLM provider', `${theme.warning('⚠')} not configured`))
   }
 
+  // API key (presence only — the value is never displayed)
+  if (config.apiKey !== undefined) {
+    stdout(infoRow('API key', `${theme.success('✓')} configured`))
+  } else {
+    stdout(infoRow('API key', `${theme.warning('⚠')} not configured (LUNAR_API_KEY)`))
+  }
+
   stdout('')
   stdout(`${theme.muted('version')}   ${version}`)
   stdout('')
-  stdout(`${theme.success('Status:')} READY FOR PHASE 1`)
+  stdout(`${theme.success('Status:')} AGENT CORE READY (Phase 1)`)
   stdout('')
 }

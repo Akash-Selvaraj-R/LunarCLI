@@ -8,14 +8,15 @@
 
 LunarCLI is an autonomous AI software-engineering agent that runs directly
 inside your developer terminal. You describe what you want in plain
-language; Lunar inspects your repository, plans the work, edits files, runs
-tests, diagnoses failures, and verifies the result.
+language; Lunar reasons about it with a configured LLM, shows its answer
+as it streams, and (in later phases) will inspect your repository, plan
+the work, edit files, run tests, and verify the result.
 
-> **Status: Phase 0 — Foundation.**
-> The autonomous coding runtime is **not implemented yet**. Today LunarCLI
-> gives you a working CLI, an interactive terminal UI, configuration,
-> workspace detection, and the provider/agent abstractions that later
-> phases build on. See [Roadmap](#roadmap).
+> **Status: Phase 1 — Agent Core.**
+> Lunar can now hold real conversations with a configured LLM provider —
+> interactively and in one-shot mode — with streaming, cancellation, and
+> conversation history. It **cannot** execute commands or modify files;
+> it has no tools. See [Roadmap](#roadmap).
 
 ## Vision
 
@@ -38,25 +39,49 @@ lunar "fix the authentication bug and make sure all tests pass"
 and have Lunar do the work — safely, transparently, and inside your
 existing terminal workflow.
 
-## Current Status (Phase 0 — Foundation)
+## Current Status (Phase 1 — Agent Core)
 
 Implemented:
 
-- `lunar` launches an interactive terminal UI (Ink + React)
-- `lunar --help` / `--version` / `--debug` / `--cwd <path>`
-- `lunar "task"` accepts a task and acknowledges it (no execution yet)
-- `lunar doctor` installation sanity check
-- Workspace + Git repository detection (branch, project root)
-- Zod-validated configuration with clear precedence
-  (CLI → environment → config file → defaults)
-- Provider-independent LLM abstraction with a registry and
-  Phase 0 stubs for OpenAI, Anthropic, and Gemini
-- Structured error hierarchy and leveled logging with secret redaction
-- Domain types for sessions, messages, tasks, and tools (Phase 1 contract)
-- Full test suite, strict TypeScript, ESLint, Prettier
+- Interactive conversation with a configured LLM provider
+  (`lunar` → `lunar › …`, streamed responses)
+- One-shot mode: `lunar "explain this project"` runs the agent once and
+  prints the answer
+- Agent runtime (`src/agent/`) fully separated from the terminal UI —
+  testable without Ink
+- Conversation state (in-memory session; history is carried into every
+  subsequent request; the session disappears when Lunar exits)
+- Context assembly: system prompt + workspace identity + conversation
+  history (no file scanning, no repository indexing)
+- Real provider adapters over plain HTTP with SSE streaming:
+  OpenAI, Anthropic, Google Gemini — plus a deterministic `mock`
+  provider for tests and keyless smoke runs
+- Structured provider error handling: missing provider, missing API key,
+  invalid API key, rate limiting, unsupported model, network failure,
+  malformed responses — each with an actionable hint
+- Graceful cancellation: Ctrl+C during generation cancels the request
+  and returns to the prompt; Ctrl+D exits cleanly
+- Tool-calling **foundation** (registry, definitions, call/result types)
+  that executes **nothing** — an unexpected model tool call is refused
+- Secret redaction in logs, errors, and debug output (key names and
+  secret-shaped values)
+- Full test suite (unit + driven-terminal interactive tests), strict
+  TypeScript, ESLint, Prettier
 
-Not implemented (by design, in later phases): the agent loop, tool
-execution, file modification, shell access, permissions, memory, MCP.
+Not implemented (by design, in later phases): tool execution, shell
+access, file modification, planning, autonomous loops, permissions,
+memory, MCP.
+
+### Phase 1 limits (deliberate)
+
+```text
+Lunar can:  read the context it was given, talk to the model, show answers
+Lunar can't: run commands, read/write files, mutate git, browse the web
+```
+
+The model receives only the workspace identity (path, git repo/branch)
+and the conversation. There is no LLM → shell and no LLM → filesystem
+path of any kind.
 
 ## Installation
 
@@ -80,7 +105,7 @@ lunar --version             # version
 lunar --debug               # verbose diagnostics on stderr
 lunar --cwd <path>          # operate in a different directory
 lunar doctor                # installation health check
-lunar "fix the auth bug"    # acknowledge a task (execution: Phase 1)
+lunar "explain this project" # send a one-shot task to the agent
 ```
 
 ### Configuration
@@ -128,16 +153,20 @@ src/
 ├── cli/          CLI entry point, argument parsing, commands
 ├── app/          Interactive application root (Ink)
 ├── ui/           Terminal UI components, theme, styles
+├── agent/        Agent runtime: loop, context, system prompt, events
+├── conversation/ In-memory conversation history (session-backed)
 ├── domain/       Types, errors, models — the stable contract
 ├── config/       Zod schema, defaults, layered config loader
-├── providers/    LLM abstraction, registry, Phase 0 stubs
+├── providers/    LLM abstraction, registry, HTTP/SSE adapters
+├── tools/        Tool architecture (registry only — nothing executes)
 ├── workspace/    Workspace + git detection
 ├── permissions/  Permission engine placeholder (Phase 4)
 ├── logging/      Leveled logger with secret redaction
 └── utils/        Small shared helpers
 ```
 
-Dependency rule: `cli` and `app` depend on `domain`/`config`/`providers`;
+Dependency rule: `cli` and `app` depend on `domain`/`config`/`providers`/`agent`;
+the agent depends on `providers` only through the `LLMProvider` interface —
 nothing outside `providers/` imports a concrete LLM SDK.
 
 ## Development
@@ -159,7 +188,7 @@ npm run typecheck && npm run lint && npm test && npm run build
 
 ### Security baseline
 
-Even in Phase 0 these rules hold:
+From Phase 0 onward, these rules hold:
 
 - No secrets in logs, code, or the repository
 - No shell execution from user input
@@ -170,7 +199,7 @@ Even in Phase 0 these rules hold:
 ## Roadmap
 
 ```text
-Phase 0 — Foundation
+Phase 0 — Foundation                ✓
 [x] CLI
 [x] Terminal UI
 [x] Configuration
@@ -178,12 +207,13 @@ Phase 0 — Foundation
 [x] Provider abstraction
 [x] Testing infrastructure
 
-Phase 1 — Agent Core
-[ ] Agent loop
-[ ] Context management
-[ ] Planning
-[ ] Tool calling
-[ ] Conversation state
+Phase 1 — Agent Core                ✓
+[x] Agent loop
+[x] Context management
+[x] Conversation state
+[x] Provider integration + streaming
+[x] Cancellation
+[x] Tool-call foundation (no execution)
 
 Phase 2 — Engineering Tools
 [ ] File tools
@@ -192,7 +222,7 @@ Phase 2 — Engineering Tools
 [ ] Git tools
 [ ] Test runner
 
-Phase 3 — Autonomous Engineering
+Phase 3 — Autonomous Loop
 [ ] Observe → Act → Verify loop
 [ ] Failure recovery
 [ ] Automatic debugging
@@ -204,13 +234,18 @@ Phase 4 — Safety
 [ ] Approval flows
 [ ] Sandboxed execution
 
-Phase 5 — Advanced
-[ ] MCP
-[ ] Memory
-[ ] Multiple agents
-[ ] Web research
-[ ] Worktrees
+Phase 5 — Memory & Sessions
 [ ] Session persistence
+[ ] Long-term memory
+
+Phase 6 — MCP & Integrations
+[ ] MCP client
+[ ] IDE integration
+[ ] Web research
+
+Phase 7 — Production
+[ ] Packaging and distribution
+[ ] Hardening and telemetry
 ```
 
 ## Contributing
