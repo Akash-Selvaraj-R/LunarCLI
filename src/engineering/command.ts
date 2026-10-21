@@ -7,26 +7,44 @@ import { createSilentLogger } from '../logging/logger.js'
 import type { Workspace } from '../domain/types/workspace.js'
 import { resolveWorkspacePath } from '../tools/path-security.js'
 import { ToolError } from '../tools/errors.js'
+import type { CommandRisk } from '../security/classifier.js'
+import { resolveExecutable } from '../security/executable-resolver.js'
+import { normalizeCommand } from '../security/normalizer.js'
+import type { NormalizedCommand } from '../security/normalizer.js'
+import type { NetworkMode } from '../security/network-policy.js'
+import { DEFAULT_NETWORK_MODE, networkLabel } from '../security/network-policy.js'
+import { CommandPolicy } from '../security/policy.js'
+import type { CommandDecisionKind } from '../security/policy.js'
 import { DEFAULT_ALLOWED_COMMANDS } from './limits.js'
 import type { EngineeringLimits } from './limits.js'
+import type { CommandApprovalHandler } from './approval.js'
+import { denyCommand } from './approval.js'
+import type { SandboxProvider } from './sandbox.js'
+import { createSandbox } from './sandbox.js'
 
 /**
- * Controlled command execution (Phase 3).
- *
- * This is NOT exec(modelOutput). Commands are structured
+ * Controlled command execution (Phase 3) with the Phase 4 security
+ * pipeline. Still NOT exec(modelOutput): commands are structured
  * `executable + args[]` requests that pass every gate before anything
  * spawns:
  *
- *   executable allowlist   bare names only; no paths, no shells
- *   argument bounds        count and size caps
- *   workspace cwd          resolved through the Phase 2 boundary
- *   timeout                hard kill after the configured duration
- *   output caps            stdout/stderr bounded; overflow kills
- *   no shell               spawn with shell:false — args are never
- *                          interpreted, so injection is impossible
+ *   normalize            canonical executable/args/cwd (NUL, paths,
+ *                        reserved names rejected)
+ *   hard deny            shells, transfer tools, LOLBins, git mutation,
+ *                        destructive OS ops — checked before allowlist
+ *   executable allowlist bare names only; no paths, no shells
+ *   classification       per-command risk (executable AND arguments)
+ *   policy               global + project overlay → allow/ask/deny
+ *   permission           'ask' → the interactive gate (default deny)
+ *   sandbox              workspace cwd, FILTERED environment, hard
+ *                        timeout with process-tree termination
+ *   resolve              bare name → ONE absolute path (no TOCTOU);
+ *                        batch files (.cmd/.bat/.ps1) fail closed
+ *   spawn                shell:false — args are never interpreted
  *
- * Completed processes return a structured CommandResult (any exit
- * code). Infrastructure problems throw a controlled ToolError.
+ * Every decision emits a CommandAuditEvent. Completed processes return
+ * a structured CommandResult (any exit code); blocked or invalid
+ * requests throw a controlled ToolError.
  */
 
 export interface CommandRequest {
@@ -48,16 +66,52 @@ export interface CommandResult {
   readonly truncated: boolean
 }
 
+/** One observable step of the security pipeline (never carries secrets). */
+export interface CommandAuditEvent {
+  readonly type:
+    | 'proposed'
+    | 'normalized'
+    | 'classified'
+    | 'policy_evaluated'
+    | 'permission_requested'
+    | 'permission_granted'
+    | 'permission_denied'
+    | 'sandbox_prepared'
+    | 'started'
+    | 'completed'
+    | 'timed_out'
+    | 'blocked'
+  /** Canonical human-readable command. */
+  readonly command: string
+  readonly risk?: CommandRisk
+  readonly decision?: CommandDecisionKind
+  readonly reason?: string
+  readonly sandbox?: string
+  readonly network?: boolean
+  readonly exitCode?: number | null
+  readonly durationMs?: number
+  readonly timedOut?: boolean
+  readonly truncated?: boolean
+}
+
 export interface CommandExecutorOptions {
   workspace: Workspace
   limits: EngineeringLimits
   logger?: Logger
   /** Overrides the built-in allowlist when non-empty. */
   allowedCommands?: readonly string[]
+  /** Command policy (risk → decision). Defaults to the standard policy. */
+  policy?: CommandPolicy
+  /** Consulted when the policy says 'ask'. Defaults to denyCommand. */
+  approval?: CommandApprovalHandler
+  /** Sandbox backend. Defaults to the best available (restricted). */
+  sandbox?: SandboxProvider
+  /** Network policy mode (deny-by-default is the only Phase 4 mode). */
+  networkMode?: NetworkMode
+  /** Audit sink — every pipeline decision, for events and logging. */
+  onAudit?: (event: CommandAuditEvent) => void
 }
 
-const MAX_ARGS = 32
-const MAX_ARG_CHARS = 4096
 const KILL_GRACE_MS = 2_000
 
 export class CommandExecutor {
@@ -65,6 +119,13 @@ export class CommandExecutor {
   private readonly limits: EngineeringLimits
   private readonly logger: Logger
   private readonly allowed: Set<string>
+  private readonly policy: CommandPolicy
+  private readonly approval: CommandApprovalHandler
+  private readonly sandbox: SandboxProvider
+  private readonly networkMode: NetworkMode
+  private readonly onAudit: (event: CommandAuditEvent) => void
+  /** In-flight commands — enforces maxConcurrentCommands. */
+  private active = 0
 
   constructor(options: CommandExecutorOptions) {
     this.workspace = options.workspace
@@ -73,6 +134,11 @@ export class CommandExecutor {
     const configured = options.allowedCommands ?? this.limits.allowedCommands
     const list = configured.length > 0 ? configured : DEFAULT_ALLOWED_COMMANDS
     this.allowed = new Set(list.map((name) => name.toLowerCase()))
+    this.policy = options.policy ?? new CommandPolicy()
+    this.approval = options.approval ?? denyCommand
+    this.sandbox = options.sandbox ?? createSandbox('auto', { logger: this.logger })
+    this.networkMode = options.networkMode ?? DEFAULT_NETWORK_MODE
+    this.onAudit = options.onAudit ?? (() => {})
   }
 
   /** Validate an executable against the allowlist (bare names only). */
@@ -98,45 +164,186 @@ export class CommandExecutor {
     }
   }
 
-  /** Run one command. Never uses a shell. */
+  /**
+   * Run one command through the full security pipeline. Never uses a
+   * shell. Throws a controlled ToolError when any gate refuses.
+   */
   async run(request: CommandRequest, options: { signal?: AbortSignal } = {}): Promise<CommandResult> {
-    this.validateExecutable(request.executable)
+    const rawDisplay = `${request.executable} ${request.args.join(' ')}`.trim()
+    this.audit({ type: 'proposed', command: rawDisplay })
 
-    if (request.args.length > MAX_ARGS) {
-      throw new ToolError('invalid_input', `Too many arguments (limit ${MAX_ARGS}).`)
-    }
-    for (const arg of request.args) {
-      if (typeof arg !== 'string' || arg.length > MAX_ARG_CHARS) {
-        throw new ToolError('invalid_input', `Argument exceeds ${MAX_ARG_CHARS} characters.`)
-      }
-    }
+    // ── NORMALIZE ──────────────────────────────────────────────────
+    const command: NormalizedCommand = normalizeCommand(request)
+    this.audit({ type: 'normalized', command: command.display })
 
-    // Working directory must exist inside the workspace.
+    // ── CWD VALIDATION (before any approval — invalid input first) ─
     const cwd = resolveWorkspacePath(this.workspace.root, request.cwd ?? '.')
     const stat = fs.statSync(cwd)
     if (!stat.isDirectory()) {
       throw new ToolError('not_a_file', `Command cwd is not a directory: ${request.cwd ?? '.'}`)
     }
 
-    const timeoutMs = Math.min(
+    // ── CLASSIFY + POLICY (hard deny included) ─────────────────────
+    const decision = this.policy.evaluate(command)
+    this.audit({
+      type: 'classified',
+      command: command.display,
+      risk: decision.risk,
+      reason: decision.reason,
+      network: decision.network,
+    })
+    this.audit({
+      type: 'policy_evaluated',
+      command: command.display,
+      risk: decision.risk,
+      decision: decision.decision,
+      reason: decision.reason,
+    })
+
+    // ── PERMISSION ─────────────────────────────────────────────────
+    if (decision.decision === 'deny') {
+      this.audit({
+        type: 'blocked',
+        command: command.display,
+        risk: decision.risk,
+        decision: 'deny',
+        reason: decision.reason,
+      })
+      throw new ToolError('permission_denied', `Command denied: ${command.display}`, {
+        hint: decision.reason,
+        details: { risk: decision.risk, source: decision.source },
+      })
+    }
+
+    // ── ALLOWLIST (Phase 3 gate — after deny, before any prompt) ──
+    try {
+      this.validateExecutable(command.executable)
+    } catch (error) {
+      this.audit({
+        type: 'blocked',
+        command: command.display,
+        risk: decision.risk,
+        decision: 'deny',
+        reason: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
+
+    if (decision.decision === 'ask') {
+      this.audit({
+        type: 'permission_requested',
+        command: command.display,
+        risk: decision.risk,
+        reason: decision.reason,
+      })
+      const approved = await this.approval.approveCommand(
+        {
+          display: command.display,
+          risk: decision.risk,
+          reason: decision.reason,
+          sandboxLabel: this.sandbox.describe().label,
+          networkModeLabel: networkLabel(this.networkMode),
+        },
+        { ...(options.signal !== undefined ? { signal: options.signal } : {}) },
+      )
+      if (!approved) {
+        this.audit({
+          type: 'permission_denied',
+          command: command.display,
+          risk: decision.risk,
+          reason: 'The user declined the command.',
+        })
+        this.audit({
+          type: 'blocked',
+          command: command.display,
+          risk: decision.risk,
+          decision: 'deny',
+          reason: 'The user declined the command.',
+        })
+        throw new ToolError('permission_denied', `Command not approved: ${command.display}`, {
+          hint: decision.reason,
+        })
+      }
+    }
+    this.audit({
+      type: 'permission_granted',
+      command: command.display,
+      risk: decision.risk,
+      decision: decision.decision,
+    })
+
+    // ── SANDBOX (workspace cwd + filtered environment) ─────────────
+    const context = await this.sandbox.prepare(this.workspace, {
+      cwd: command.cwd,
+      timeoutMs: this.effectiveTimeout(request),
+      maxOutputBytes: this.limits.maxOutputBytes,
+    })
+    this.audit({
+      type: 'sandbox_prepared',
+      command: command.display,
+      sandbox: this.sandbox.describe().label,
+    })
+
+    // ── CONCURRENCY GUARD ──────────────────────────────────────────
+    if (this.active >= this.limits.maxConcurrentCommands) {
+      throw new ToolError(
+        'execution_error',
+        `Concurrent command limit reached (${this.limits.maxConcurrentCommands}).`,
+      )
+    }
+
+    // ── RESOLVE (one absolute path — classification cannot drift) ──
+    const executablePath = resolveExecutable(command.executable, context.env)
+
+    // ── EXECUTE (shell:false, filtered env, tree-kill on timeout) ──
+    this.active += 1
+    this.audit({
+      type: 'started',
+      command: command.display,
+      risk: decision.risk,
+      sandbox: this.sandbox.describe().label,
+      network: decision.network,
+    })
+    try {
+      return await this.spawnIsolated(command, executablePath, context, options)
+    } finally {
+      this.active -= 1
+      await this.sandbox.cleanup(context).catch(() => {})
+    }
+  }
+
+  /** Effective timeout: request-bounded by the configured hard cap. */
+  private effectiveTimeout(request: CommandRequest): number {
+    return Math.min(
       Math.max(request.timeoutMs ?? this.limits.commandTimeoutMs, 100),
       this.limits.commandTimeoutMs,
     )
+  }
 
+  /** The spawn itself — isolated in one place, always shell:false. */
+  private spawnIsolated(
+    command: NormalizedCommand,
+    executablePath: string,
+    context: { cwd: string; env: Record<string, string>; timeoutMs: number; maxOutputBytes: number },
+    options: { signal?: AbortSignal },
+  ): Promise<CommandResult> {
     const startedAt = Date.now()
     return new Promise<CommandResult>((resolve, reject) => {
       let child
       try {
-        child = spawn(request.executable, [...request.args], {
-          cwd,
+        child = spawn(executablePath, [...command.args], {
+          cwd: context.cwd,
+          env: context.env, // filtered — nothing else is inherited
           shell: false, // critical: arguments are never interpreted
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe'],
+          // POSIX: own process group, so the whole tree can be killed.
+          ...(process.platform === 'win32' ? {} : { detached: true }),
           ...(options.signal !== undefined ? { signal: options.signal } : {}),
         })
       } catch (error) {
         reject(
-          new ToolError('execution_error', `Failed to spawn ${request.executable}: ${String(error)}`, {
+          new ToolError('execution_error', `Failed to spawn ${command.executable}: ${String(error)}`, {
             cause: error,
           }),
         )
@@ -151,17 +358,20 @@ export class CommandExecutor {
       let truncated = false
       let settled = false
 
-      const kill = (): void => {
+      const killTree = (): void => {
+        // Kill the whole tree — a timed-out parent must not leave an
+        // uncontrolled child running (best-effort, platform-aware).
+        void this.sandbox.terminateTree(child.pid)
         child.kill()
-        // Escalate if the process ignores the first signal.
         setTimeout(() => {
           if (!settled) child.kill('SIGKILL')
         }, KILL_GRACE_MS).unref?.()
       }
       const timer = setTimeout(() => {
         timedOut = true
-        kill()
-      }, timeoutMs)
+        this.audit({ type: 'timed_out', command: command.display })
+        killTree()
+      }, context.timeoutMs)
 
       const settle = (fn: () => void): void => {
         if (settled) return
@@ -173,9 +383,9 @@ export class CommandExecutor {
       child.stdout?.setEncoding('utf8')
       child.stdout?.on('data', (chunk: string) => {
         stdoutBytes += Buffer.byteLength(chunk)
-        if (stdoutBytes > this.limits.maxOutputBytes) {
+        if (stdoutBytes > context.maxOutputBytes) {
           truncated = true
-          kill()
+          killTree()
           return
         }
         stdout += chunk
@@ -183,9 +393,9 @@ export class CommandExecutor {
       child.stderr?.setEncoding('utf8')
       child.stderr?.on('data', (chunk: string) => {
         stderrBytes += Buffer.byteLength(chunk)
-        if (stderrBytes > this.limits.maxOutputBytes) {
+        if (stderrBytes > context.maxOutputBytes) {
           truncated = true
-          kill()
+          killTree()
           return
         }
         stderr += chunk
@@ -195,13 +405,13 @@ export class CommandExecutor {
         settle(() => {
           if (error.code === 'ENOENT') {
             reject(
-              new ToolError('execution_error', `Executable not found on PATH: ${request.executable}`, {
+              new ToolError('execution_error', `Executable not found on PATH: ${command.executable}`, {
                 hint: 'Install it or choose a different verification command.',
               }),
             )
           } else {
             reject(
-              new ToolError('execution_error', `${request.executable} failed to start: ${error.message}`, {
+              new ToolError('execution_error', `${command.executable} failed to start: ${error.message}`, {
                 cause: error,
               }),
             )
@@ -216,16 +426,26 @@ export class CommandExecutor {
             return
           }
           const durationMs = Date.now() - startedAt
+          this.audit({
+            type: 'completed',
+            command: command.display,
+            exitCode: code,
+            durationMs,
+            timedOut,
+            truncated,
+          })
           this.logger.debug('Command finished', {
-            command: `${request.executable} ${request.args.join(' ')}`,
+            command: command.display,
             exitCode: code,
             timedOut,
             truncated,
             durationMs,
           })
           resolve({
-            executable: request.executable,
-            args: request.args,
+            // The ORIGINAL request identity is preserved in the result
+            // for display; execution used the resolved absolute path.
+            executable: command.executable,
+            args: command.args,
             exitCode: code,
             stdout,
             stderr,
@@ -236,5 +456,11 @@ export class CommandExecutor {
         })
       })
     })
+  }
+
+  /** Emit one audit event to the sink and the debug log. */
+  private audit(event: CommandAuditEvent): void {
+    this.onAudit(event)
+    this.logger.debug('command.audit', { ...event })
   }
 }

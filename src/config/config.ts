@@ -70,7 +70,7 @@ function loadConfigFile(configPath: string): LunarConfigInput {
     throw new ConfigurationError(`Configuration file must contain a JSON object: ${configPath}`)
   }
 
-  const { debug, provider, model, apiKey, engineering } = parsed as Record<string, unknown>
+  const { debug, provider, model, apiKey, engineering, security } = parsed as Record<string, unknown>
   return {
     ...(typeof debug === 'boolean' ? { debug } : {}),
     ...(typeof provider === 'string' ? { provider } : {}),
@@ -81,6 +81,7 @@ function loadConfigFile(configPath: string): LunarConfigInput {
     ...(engineering !== undefined
       ? { engineering: engineering as LunarConfigInput['engineering'] }
       : {}),
+    ...(security !== undefined ? { security: security as LunarConfigInput['security'] } : {}),
   }
 }
 
@@ -106,6 +107,7 @@ function definedOnly(input: LunarConfigInput): LunarConfigInput {
   if (input.apiKey !== undefined) result.apiKey = input.apiKey
   if (input.debug !== undefined) result.debug = input.debug
   if (input.engineering !== undefined) result.engineering = input.engineering
+  if (input.security !== undefined) result.security = input.security
   return result
 }
 
@@ -130,6 +132,9 @@ export function loadConfig(options: LoadConfigOptions = {}): LunarConfig {
     // single `--engineer` flag never wipes configured limits.
     ...(fileConfig.engineering !== undefined || cliConfig.engineering !== undefined
       ? { engineering: { ...fileConfig.engineering, ...cliConfig.engineering } }
+      : {}),
+    ...(fileConfig.security !== undefined || cliConfig.security !== undefined
+      ? { security: { ...fileConfig.security, ...cliConfig.security } }
       : {}),
   }
 

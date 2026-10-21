@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { CommandExecutor } from '../src/engineering/command.js'
+import { autoCommandApprove } from '../src/engineering/approval.js'
 import { resolveLimits } from '../src/engineering/limits.js'
 import { isToolError, ToolError } from '../src/tools/errors.js'
 import { detectWorkspace } from '../src/workspace/detector.js'
@@ -33,7 +34,14 @@ afterEach(() => {
 })
 
 function executor(overrides = {}): CommandExecutor {
-  return new CommandExecutor({ workspace, limits: resolveLimits(), ...overrides })
+  // Phase 4: `node -e` is a REVIEW-class command (inline code). The
+  // harness is the trusted user, so it grants approval explicitly.
+  return new CommandExecutor({
+    workspace,
+    limits: resolveLimits(),
+    approval: autoCommandApprove,
+    ...overrides,
+  })
 }
 
 async function expectToolError(

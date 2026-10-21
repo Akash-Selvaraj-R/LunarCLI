@@ -197,4 +197,53 @@ describe('engineering limits (Phase 3)', () => {
     const config = validateConfig({ engineering: { allowedCommands: ['npm', 'node'] } })
     expect(config.engineering?.allowedCommands).toEqual(['npm', 'node'])
   })
+
+  it('accepts the concurrency limit', () => {
+    const config = validateConfig({ engineering: { maxConcurrentCommands: 2 } })
+    expect(config.engineering?.maxConcurrentCommands).toBe(2)
+    expect(() => validateConfig({ engineering: { maxConcurrentCommands: 0 } })).toThrow(
+      ConfigurationError,
+    )
+  })
+})
+
+describe('security settings (Phase 4)', () => {
+  it('is absent when nothing is configured (defaults apply)', () => {
+    const config = loadConfig({ env: {}, configPath: missingConfig })
+    expect(config.security).toBeUndefined()
+  })
+
+  it('reads the security section from the config file', () => {
+    const file = writeConfigFile(
+      JSON.stringify({ security: { sandbox: 'auto', network: 'deny', environment: 'filtered' } }),
+    )
+    const config = loadConfig({ env: {}, configPath: file })
+    expect(config.security).toEqual({ sandbox: 'auto', network: 'deny', environment: 'filtered' })
+  })
+
+  it('rejects values that would disable a core boundary', () => {
+    // No "off" sandbox — only enforcement levels or fail-closed deny.
+    expect(() => validateConfig({ security: { sandbox: false } })).toThrow(ConfigurationError)
+    expect(() => validateConfig({ security: { sandbox: 'none' } })).toThrow(ConfigurationError)
+    // Network can never be opened from configuration.
+    expect(() => validateConfig({ security: { network: 'allow' } })).toThrow(ConfigurationError)
+    // Environment can never be "inherited".
+    expect(() => validateConfig({ security: { environment: 'inherit' } })).toThrow(
+      ConfigurationError,
+    )
+  })
+
+  it('rejects unknown security keys (strict schema)', () => {
+    expect(() => validateConfig({ security: { sandboxMode: 'auto' } })).toThrow(
+      ConfigurationError,
+    )
+    expect(() => validateConfig({ security: { sandbox: 'deny', oops: 1 } })).toThrow(
+      ConfigurationError,
+    )
+  })
+
+  it('accepts the fail-closed sandbox mode', () => {
+    const config = validateConfig({ security: { sandbox: 'deny' } })
+    expect(config.security?.sandbox).toBe('deny')
+  })
 })

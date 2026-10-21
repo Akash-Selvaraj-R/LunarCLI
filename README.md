@@ -11,20 +11,21 @@ LunarCLI is an AI engineering agent that runs in your terminal.
 It can inspect a repository, reason about the codebase, create a
 structured engineering plan, propose file changes, show a diff, obtain
 permission, apply approved changes atomically, run controlled
-verification, diagnose failures, and perform bounded corrective
-iterations.
+verification through a full security pipeline, diagnose failures, and
+perform bounded corrective iterations.
 
-> **Status: Phase 3 — Autonomous Engineering Loop.**
-> In explicit `--engineer` mode, Lunar runs a **bounded autonomous
-> loop**: it plans the change, proposes structured file edits, shows you
-> a diff, asks for approval, applies atomically, runs controlled
-> verification, and — on failure — diagnoses and proposes a fix. Git
-> commit/push and unrestricted network access are **not implemented**.
-> See [Roadmap](#roadmap).
+> **Status: Phase 3 + Phase 4 — Autonomous Loop with Security
+> Pipeline.** In explicit `--engineer` mode, Lunar runs a **bounded
+> autonomous loop**: it plans the change, proposes structured file
+> edits, shows you a diff, asks for approval, applies atomically, runs
+> controlled verification (normalized → classified → policy-checked →
+> sandbox-constrained), and — on failure — diagnoses and proposes a
+> fix. Git commit/push, arbitrary shell, and unrestricted network
+> access are **hard-denied**. See [Roadmap](#roadmap).
 
 ```text
-Current release: v0.4.0
-Phase: 3 — Autonomous Engineering Loop
+Current release: v0.5.0
+Phase: 4 — Safety & Sandboxing
 ```
 
 ## Installation
@@ -48,18 +49,21 @@ lunar "explain this project"               # one-shot: answer a single question
 lunar "add a /health endpoint" --engineer   # autonomous engineering loop
 lunar "add a /health endpoint" --engineer --yes  # trusted mode (see below)
 lunar --help                               # usage
-lunar --version                            # version (v0.4.0)
+lunar --version                            # version (v0.5.0)
 lunar --debug                              # verbose diagnostics (timings, args)
 lunar --cwd <path>                         # operate in a different directory
-lunar doctor                               # installation health check
+lunar doctor                               # installation health check + security posture
 ```
 
 - `--engineer` activates the bounded engineering loop: plan → propose →
   validate → approve → apply → verify, with diagnosis and a bounded
   retry on failure. Lunar asks before touching any file.
-- `--yes` enables trusted auto-approval: permitted mutations are applied
-  without a prompt, while dangerous operations remain denied according
-  to the Phase 3 permission system. It is **not** unrestricted
+- `--yes` enables trusted auto-approval: mutations that the permission
+  system already considers auto-approvable are applied without a
+  prompt, and REVIEW-class commands (dependency installs, builds) are
+  auto-approved. DANGEROUS commands (inline code execution, `npx`)
+  **still prompt**, and hard-denied commands (shells, `curl`,
+  `git push`, …) **stay denied**. It is **not** unrestricted
   execution.
 
 Example interactive session:
@@ -112,12 +116,32 @@ The safety boundary: nothing reaches disk without passing validation
 and the permission/approval gate, and a task stops after `maxIterations`
 corrective attempts — never `while (true)`.
 
-### Phase 3 limits (defaults; all configurable)
+Every verification command passes the Phase 4 security pipeline before
+it runs:
+
+```text
+CommandRequest
+  ↓ normalize      canonical form; paths/NUL/reserved names rejected
+  ↓ hard deny      shells, curl/wget, git push/commit, rm, …
+  ↓ classify       per-command risk (npm test ≠ npm publish)
+  ↓ policy         global + project overlay → allow / ask / deny
+  ↓ permission     'ask' → interactive prompt (default deny)
+  ↓ sandbox        workspace cwd + FILTERED environment + timeout
+  ↓ resolve        bare name → one absolute path (batch files refused)
+  ↓ execute        shell:false, process-tree kill on timeout
+```
+
+The model never determines whether a command is safe — Lunar does.
+See [Security](#security-pipeline-phase-4) below and
+`docs/architecture/security.md` for the complete model.
+
+### Limits (defaults; all configurable)
 
 ```text
 maxIterations            3    corrective attempts per task
 maxMutations            20    file writes per task
 maxCommands             10    command executions per task
+maxConcurrentCommands    1    commands running at the same time
 commandTimeoutMs   120000    hard kill after 2 minutes
 maxOutputBytes      128000    per stream (stdout/stderr)
 maxFileBytes        262144    per mutated file
@@ -125,7 +149,94 @@ maxChangesPerProposal   10    per proposal
 jsonRetries              2    extra attempts on invalid model JSON
 ```
 
-## Current Status (Phase 3 — Autonomous Engineering Loop)
+## Security pipeline (Phase 4)
+
+Lunar treats the model as **untrusted input**. The model proposes;
+Lunar validates, classifies, evaluates policy, requests approval when
+required, constrains execution in a sandbox, and only then runs a
+command. The security boundary exists outside the model.
+
+### Command classification
+
+Every command is classified by its **normalized form** — executable
+AND arguments, never the executable alone (`npm test` and
+`npm publish` are different commands):
+
+```text
+safe        npm test, npm run lint, cargo test, go test, node --version,
+            git status/diff/log/branch
+review      npm install, cargo build, python script.py, node script.js,
+            unknown executables — require approval (auto-approved
+            with --yes)
+dangerous   node -e, python -c, npx, npm exec, git config — always
+            require explicit approval, even with --yes
+denied      bash/sh/cmd/powershell, curl/wget/ssh, git push/commit/
+            reset/checkout/merge, rm/del, sudo, taskkill, certutil —
+            cannot be overridden by allowlist, project policy, --yes,
+            or approval
+```
+
+### Policy precedence
+
+```text
+1. hard deny        absolute — shells, transfer tools, git mutation
+2. global policy    built-in risk → decision mapping
+3. project policy   .lunar/policy.json (may tighten, never override
+                    hard deny or auto-allow dangerous)
+4. user approval    the interactive gate for 'ask' decisions
+```
+
+### Environment isolation
+
+Engineering commands never inherit the parent environment. They
+receive a minimal allowlist (`PATH`, `HOME`, `TEMP`, …); everything
+else is dropped — including `LUNAR_API_KEY` (Lunar's own provider
+credentials never reach a command) and any variable that looks
+secret-bearing (`*_API_KEY`, `*_TOKEN`, `AWS_*`, …).
+
+### Sandbox
+
+The sandbox is reported honestly — never overstated:
+
+```text
+Sandbox: RESTRICTED FALLBACK   workspace-bound cwd, filtered
+                               environment, hard timeout with
+                               process-tree termination, bounded
+                               output. No OS-level filesystem or
+                               network isolation.
+```
+
+A fail-closed mode is available (`"security": { "sandbox": "deny" }`):
+when no full sandbox exists (i.e. always in Phase 4), command
+execution is refused outright rather than pretending to be isolated.
+
+### Network
+
+Denied by default. `curl`, `wget`, `ssh` and network transfer tools
+are hard-denied; URL-shaped arguments escalate a command's risk. There
+is no HTTP tool, no browser, and no configuration value that opens the
+network.
+
+### Project command policy (`.lunar/policy.json`)
+
+A repository may ship per-command decisions:
+
+```json
+{
+  "commands": {
+    "npm test": "allow",
+    "npm run lint": "allow",
+    "npm install": "deny"
+  }
+}
+```
+
+This file is repository content and therefore **untrusted**: it may
+tighten decisions or auto-approve REVIEW-class commands, but it can
+never override a hard deny or auto-approve a DANGEROUS command.
+Malformed policies fail closed — the loop refuses to start.
+
+## Current Status (Phase 3 + Phase 4)
 
 Implemented:
 
@@ -150,7 +261,8 @@ Implemented:
   single files only (no directory deletion)
 - **Controlled command execution**: structured `executable + args[]`
   requests — allowlisted bare executables, no shell, workspace-bound
-  cwd, hard timeouts with process kill, bounded stdout/stderr capture
+  cwd, hard timeouts with process-tree kill, bounded stdout/stderr
+  capture
 - **Repository-aware test runner**: command detection (`npm test`,
   `cargo test`, `go test ./...`, `pytest`, `make test`), structured
   results (exit code, pass/fail counts when parseable, duration) with
@@ -162,10 +274,33 @@ Implemented:
   re-enters PROPOSE → VALIDATE → APPROVE → APPLY; the loop stops after
   `maxIterations` (default 3)
 - **Hard limits everywhere**: iterations, mutations per task, command
-  executions, command duration, output size, file size — enforced in
-  code, configurable in `config.json`
+  executions, concurrency, command duration, output size, file size —
+  enforced in code, configurable in `config.json`
 - **Observability**: every phase, approval, mutation, and command
   execution emits an event (with duration), visible with `--debug`
+- **Command normalization (Phase 4)**: canonical executable/args/cwd
+  before classification; paths, NUL bytes, reserved names, and
+  oversized arguments are structurally rejected
+- **Per-command risk classification (Phase 4)**: safe/review/
+  dangerous/denied evaluated on the normalized command (executable AND
+  arguments), with a structured rule table and a hard-deny list that
+  cannot be overridden
+- **Command policy engine (Phase 4)**: global policy + project policy
+  overlay with documented precedence; `--yes` auto-approves only
+  REVIEW-class commands and never bypasses a hard deny
+- **Project command policy (Phase 4)**: `.lunar/policy.json` (strict
+  schema, fail-closed, untrusted — may only tighten or widen review)
+- **Environment filtering (Phase 4)**: allowlist-based; secrets and
+  Lunar's own credentials never reach a command
+- **Sandbox abstraction (Phase 4)**: platform-neutral provider,
+  honest security levels (restricted fallback, fail-closed deny mode),
+  process-tree termination on timeout
+- **Security audit events (Phase 4)**: every command decision emits a
+  structured event (proposed → normalized → classified →
+  policy_evaluated → permission → sandbox_prepared → started →
+  completed/blocked)
+- **Expanded approval UX (Phase 4)**: command prompts show risk,
+  sandbox, network posture, and a plain-language reason
 
 ### Tools
 
@@ -189,7 +324,7 @@ validation and approval:
 | Operation                    | Risk      | Status                                       |
 | ---------------------------- | --------- | -------------------------------------------- |
 | file create/update/delete    | mutating  | via `--engineer` **after approval**          |
-| verification command execution | dangerous | allowlisted executables only, no shell     |
+| verification command execution | classified | policy-classified, sandboxed, allowlisted, no shell |
 | shell / `run_command`        | dangerous | **not registered** (allowlisted cmds only)   |
 | git commit/push/checkout/reset | dangerous | **not implemented**                        |
 
@@ -197,7 +332,7 @@ Mutations are not registered tools the model can directly invoke.
 They are structured proposals that pass validation, permission,
 approval, and controlled mutation before touching disk.
 
-### Phase 3 boundaries (deliberate)
+### Boundaries (deliberate)
 
 ```text
 Lunar can:
@@ -206,16 +341,18 @@ Lunar can:
 - propose changes
 - show diffs
 - apply approved file changes
-- run controlled verification
+- run controlled, classified, sandboxed verification
 - diagnose failures
 - retry within bounded limits
 
 Lunar cannot:
-- perform git commit/push
-- execute arbitrary shell commands
-- access the network autonomously
-- recursively delete directories
+- perform git commit/push (hard-denied)
+- execute arbitrary shell commands (shells hard-denied)
+- access the network autonomously (denied by default)
+- recursively delete directories (rm/del hard-denied)
+- read secrets through command execution (environment filtered)
 - mutate files without the appropriate permission flow
+- let a project policy override a hard deny
 ```
 
 ## Configuration
@@ -252,14 +389,24 @@ Example `~/.lunar/config.json`:
     "maxIterations": 3,
     "maxMutations": 20,
     "maxCommands": 10,
+    "maxConcurrentCommands": 1,
     "allowedCommands": ["npm", "node"]
+  },
+  "security": {
+    "sandbox": "auto",
+    "network": "deny",
+    "environment": "filtered"
   }
 }
 ```
 
-The optional `engineering` section tunes the Phase 3 loop limits (see
-[Phase 3 limits](#phase-3-limits-defaults-all-configurable)). Unknown
-keys are rejected so typos surface as errors.
+The optional `engineering` section tunes the loop limits (see
+[Limits](#limits-defaults-all-configurable)). The optional `security`
+section selects the sandbox enforcement level (`"auto"`/`"restricted"`
+use the restricted fallback; `"deny"` refuses execution when no full
+sandbox is available), the network policy (only `"deny"` is accepted),
+and the environment policy (only `"filtered"` is accepted). Unknown
+keys are rejected, and no value can disable a core security boundary.
 
 The version shown by `lunar --version`, `lunar doctor`, and the CLI
 banners is derived from `package.json` — there is no second hard-coded
@@ -279,8 +426,12 @@ src/
 ├── app/          Interactive application root (Ink)
 ├── ui/           Terminal UI components, theme, styles
 ├── agent/        Agent runtime: loop, context, system prompt, events
-├── engineering/  Phase 3: plan, changes, diff, mutation, command,
-│                 test-runner, verification, approval, retry, loop
+├── engineering/  Phase 3+4: plan, changes, diff, mutation, command,
+│                 sandbox, test-runner, verification, approval, retry,
+│                 loop
+├── security/     Phase 4: normalizer, classifier, policy, project
+│                 policy, environment filter, network policy,
+│                 executable resolver, settings
 ├── conversation/ In-memory conversation history (session-backed)
 ├── domain/       Types, errors, models — the stable contract
 ├── config/       Zod schema, defaults, layered config loader
@@ -295,8 +446,10 @@ src/
 docs/architecture/
 ├── agent-loop.md       The tool-call loop and its invariants
 ├── tools.md            Tool anatomy, the Phase 2 tool set, limits
-├── engineering-loop.md Phase 3: plan → propose → approve → verify
-└── security.md         Threat model, layered defenses, path security
+├── engineering-loop.md Phase 3+4: plan → propose → approve → verify
+│                       through the security pipeline
+└── security.md         Threat model, command classification, policy
+                        precedence, sandbox, environment isolation
 ```
 
 Dependency rule: `cli` and `app` depend on `domain`/`config`/`providers`/`agent`;
@@ -326,24 +479,26 @@ npm run typecheck && npm run lint && npm test && npm run build
 These rules hold from Phase 0 onward:
 
 - No secrets in logs, code, or the repository
-- No shell execution from user input or model output
+- No shell execution from user input or model output — commands are
+  structured `executable + args[]`, spawned with `shell: false`
 - Every tool execution goes through risk classification and the
-  centralized `PermissionManager`; future approvals and sandboxing
-  (Phase 4) plug into the same interface
-- In Phase 3, file mutation and command execution are only reachable
+  centralized `PermissionManager`
+- In Phase 3+, file mutation and command execution are only reachable
   through the validated proposal path — never as direct model tools
+- In Phase 4, every command passes normalize → classify → policy →
+  permission → sandbox → filtered execution; hard-denied commands
+  (shells, transfer tools, git mutation, destructive OS operations)
+  cannot run regardless of allowlist, project policy, `--yes`, or
+  approval
+- Engineering commands never inherit the parent environment — Lunar's
+  own credentials (`LUNAR_API_KEY`) never reach a command
 
 ## Roadmap
 
-Phases 0–3 are implemented. The following are **future** phases, not
+Phases 0–4 are implemented. The following are **future** phases, not
 implemented capabilities:
 
 ```text
-Phase 4 — Safety                          (future)
-[ ] Command risk classification (per-command, not per-executable)
-[ ] Sandboxed execution
-[ ] Interactive permission rules (allowlist per project)
-
 Phase 5 — Memory & Sessions               (future)
 [ ] Session persistence
 [ ] Long-term memory
@@ -371,6 +526,13 @@ Phase 3 — Autonomous Loop            ✓  Structured plan, proposed changes,
                                        diff, approval, atomic mutation,
                                        controlled commands, test runner,
                                        verification, bounded retry
+Phase 4 — Safety & Sandboxing        ✓  Command normalization, per-command
+                                       risk classification, command policy
+                                       engine, project policy, environment
+                                       filtering, sandbox abstraction,
+                                       network deny, process-tree
+                                       termination, security audit events,
+                                       expanded approval UX
 ```
 
 ## Contributing

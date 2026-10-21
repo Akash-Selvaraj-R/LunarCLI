@@ -35,6 +35,25 @@ export const EngineeringConfigSchema = z
     jsonRetries: z.number().int().min(0).max(5).optional(),
     /** Executables the command layer may run (empty → built-in defaults). */
     allowedCommands: z.array(z.string().min(1)).max(50).optional(),
+    /** Commands running at the same time (1–4). */
+    maxConcurrentCommands: z.number().int().min(1).max(4).optional(),
+  })
+  .strict()
+
+/**
+ * Security settings (Phase 4). Strictly enumerated: there are no values
+ * that disable a core boundary. `sandbox: "deny"` fails CLOSED (no
+ * execution without a full sandbox); `network` and `environment` accept
+ * only the enforced modes.
+ */
+export const SecurityConfigSchema = z
+  .object({
+    /** Sandbox enforcement level. */
+    sandbox: z.enum(['auto', 'restricted', 'deny']).optional(),
+    /** Network policy — deny-by-default is the only Phase 4 mode. */
+    network: z.enum(['deny']).optional(),
+    /** Environment policy — filtered execution is the only mode. */
+    environment: z.enum(['filtered']).optional(),
   })
   .strict()
 
@@ -44,6 +63,7 @@ export const LunarConfigInputSchema = z.object({
   apiKey: z.string().min(1).optional(),
   debug: z.boolean().optional(),
   engineering: EngineeringConfigSchema.optional(),
+  security: SecurityConfigSchema.optional(),
 })
 
 export const LunarConfigSchema = LunarConfigInputSchema.extend({

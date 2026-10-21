@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { CommandExecutor } from '../src/engineering/command.js'
+import { autoCommandApprove } from '../src/engineering/approval.js'
 import { resolveLimits } from '../src/engineering/limits.js'
 import { VerificationManager } from '../src/engineering/verification.js'
 import type { ValidatedChange } from '../src/engineering/changes.js'
@@ -23,7 +24,12 @@ let executor: CommandExecutor
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'lunar-verify-'))
   workspace = detectWorkspace(root)
-  executor = new CommandExecutor({ workspace, limits: resolveLimits() })
+  // Phase 4: harness explicitly approves its REVIEW-class test command.
+  executor = new CommandExecutor({
+    workspace,
+    limits: resolveLimits(),
+    approval: autoCommandApprove,
+  })
 })
 
 afterEach(() => {
@@ -138,6 +144,7 @@ describe('VerificationManager', () => {
         workspace,
         limits: resolveLimits(),
         allowedCommands: ['ghost-executable-12345'],
+        approval: autoCommandApprove,
       }),
       command: { executable: 'ghost-executable-12345', args: [], cwd: '.' },
     })

@@ -14,6 +14,8 @@ export interface EngineeringLimits {
   readonly maxMutations: number
   /** Max controlled command executions across the task (default 10). */
   readonly maxCommands: number
+  /** Max commands running at the same time (default 1). */
+  readonly maxConcurrentCommands: number
   /** Hard cap on one command's runtime (default 120 s). */
   readonly commandTimeoutMs: number
   /** Cap on captured stdout/stderr per command (default 128 KB each). */
@@ -32,6 +34,7 @@ export const DEFAULT_ENGINEERING_LIMITS: EngineeringLimits = {
   maxIterations: 3,
   maxMutations: 20,
   maxCommands: 10,
+  maxConcurrentCommands: 1,
   commandTimeoutMs: 120_000,
   maxOutputBytes: 128_000,
   maxFileBytes: 256 * 1024,

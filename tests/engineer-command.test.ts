@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { runEngineer } from '../src/cli/commands/engineer.js'
 import { EngineeringLoop } from '../src/engineering/loop.js'
-import { autoApprove } from '../src/engineering/approval.js'
+import { autoApprove, autoCommandApprove } from '../src/engineering/approval.js'
 import { PermissionManager, PHASE3_AUTO_POLICY } from '../src/permissions/permission-manager.js'
 import { MockProvider } from '../src/providers/mock.js'
 import { createSilentLogger } from '../src/logging/logger.js'
@@ -96,6 +96,9 @@ async function render(
       logger: createSilentLogger(),
       permissions: new PermissionManager(PHASE3_AUTO_POLICY),
       approval: autoApprove,
+      // Phase 4: the harness explicitly approves its REVIEW-class
+      // verification command (node -e).
+      commandApproval: autoCommandApprove,
       testCommand: command,
       limits: loopLimits,
     })

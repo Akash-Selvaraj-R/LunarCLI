@@ -1,4 +1,5 @@
 import type { LunarError } from '../domain/errors/index.js'
+import type { CommandRisk } from '../security/classifier.js'
 import type { EngineeringPlan } from './plan.js'
 import type { ValidatedChange } from './changes.js'
 import type { VerificationResult } from './verification.js'
@@ -38,6 +39,25 @@ export type EngineeringEvent =
   | { type: 'verifying'; command?: string }
   | { type: 'verification_passed'; result: VerificationResult }
   | { type: 'verification_failed'; result: VerificationResult }
+  /** Command security pipeline (Phase 4) — every decision observable. */
+  | { type: 'command_proposed'; command: string }
+  | {
+      type: 'command_decision'
+      command: string
+      risk: CommandRisk
+      decision: 'allow' | 'ask' | 'deny'
+      reason: string
+    }
+  | { type: 'command_blocked'; command: string; risk: CommandRisk; reason: string }
+  | { type: 'command_started'; command: string; sandbox: string }
+  | {
+      type: 'command_completed'
+      command: string
+      exitCode: number | null
+      durationMs: number
+      timedOut: boolean
+      truncated: boolean
+    }
   /** Retry budget exhausted — stopping safely. */
   | { type: 'stopped'; reason: string }
   /** Terminal states. */

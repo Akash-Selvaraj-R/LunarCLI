@@ -2,6 +2,8 @@ import type { LunarConfig } from '../../config/schema.js'
 import type { Logger } from '../../logging/logger.js'
 import { createDefaultRegistry } from '../../providers/registry.js'
 import { detectWorkspace } from '../../workspace/detector.js'
+import { createSandbox } from '../../engineering/sandbox.js'
+import { resolveSecuritySettings } from '../../security/settings.js'
 import { stdout } from '../output.js'
 import { theme } from '../../ui/theme.js'
 import { infoRow } from '../../ui/styles.js'
@@ -74,6 +76,22 @@ export async function runDoctor(options: DoctorOptions): Promise<void> {
   stdout('')
   stdout(`${theme.muted('version')}   ${version}`)
   stdout('')
-  stdout(`${theme.success('Status:')} ENGINEERING LOOP READY (Phase 3)`)
+
+  // Phase 4 security posture — the REAL state, never aspirational.
+  const security = resolveSecuritySettings(config.security)
+  const sandbox = createSandbox(security.sandbox)
+  const sandboxState =
+    sandbox.describe().level === 'unavailable'
+      ? `${theme.error('✗')} ${sandbox.describe().label}`
+      : `${theme.warning('⚠')} ${sandbox.describe().label}`
+  stdout(theme.bold('Security'))
+  stdout(infoRow('Engineering Loop', `${theme.success('✓')} READY`))
+  stdout(infoRow('Command Policy', `${theme.success('✓')} READY (per-command, hard-deny enforced)`))
+  stdout(infoRow('Environment Filter', `${theme.success('✓')} READY (allowlist)`))
+  stdout(infoRow('Sandbox', sandboxState))
+  stdout(infoRow('Network Policy', `${theme.success('✓')} DENY (default)`))
+  stdout('')
+
+  stdout(`${theme.success('Status:')} ENGINEERING LOOP READY (Phase 3) · SECURITY PIPELINE READY (Phase 4)`)
   stdout('')
 }

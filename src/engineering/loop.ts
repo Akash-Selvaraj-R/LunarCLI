@@ -10,10 +10,14 @@ import { createDefaultToolRegistry } from '../tools/defaults.js'
 import { ToolError } from '../tools/errors.js'
 import { ToolRisk } from '../tools/risk.js'
 import { redactText } from '../utils/redact.js'
+import { CommandPolicy } from '../security/policy.js'
+import { loadProjectPolicy } from '../security/project-policy.js'
+import type { ProjectPolicy } from '../security/project-policy.js'
 import { denyAll } from './approval.js'
-import type { ApprovalHandler } from './approval.js'
+import type { ApprovalHandler, CommandApprovalHandler } from './approval.js'
+import { denyCommand } from './approval.js'
 import { CommandExecutor } from './command.js'
-import type { CommandRequest } from './command.js'
+import type { CommandAuditEvent, CommandRequest } from './command.js'
 import type { ValidatedChange } from './changes.js'
 import { validateChanges } from './changes.js'
 import type { EngineeringEvent, EngineeringEventHandler } from './events.js'
@@ -27,11 +31,14 @@ import { engineeringSystemPrompt, planPrompt, proposalPrompt, correctionPrompt }
 import { ChangeProposalSchema } from './proposal.js'
 import type { ChangeProposal } from './proposal.js'
 import { RetryController } from './retry.js'
+import type { SandboxProvider, SandboxDescription } from './sandbox.js'
+import { createSandbox } from './sandbox.js'
 import { VerificationManager } from './verification.js'
 import type { VerificationResult } from './verification.js'
 
 /**
- * EngineeringLoop — the autonomous engineering loop (Phase 3).
+ * EngineeringLoop — the autonomous engineering loop (Phase 3) with the
+ * Phase 4 security pipeline.
  *
  *   PLAN → PROPOSE → VALIDATE → PERMISSION → APPLY → VERIFY
  *                                                    │
@@ -40,12 +47,17 @@ import type { VerificationResult } from './verification.js'
  * The loop OWNS no execution of its own: research happens through the
  * Phase 2 AgentRuntime (read-only tools, permission-gated), mutations
  * happen through the MutationManager (validated changes only, after
- * approval), and verification happens through the CommandExecutor
- * (allowlisted, no shell). Every transition is bounded by
- * EngineeringLimits and observable through events.
+ * approval), and verification happens through the CommandExecutor,
+ * which now runs every command through the full Phase 4 pipeline:
+ *
+ *   normalize → classify → policy → permission → sandbox → execute
+ *
+ * Every transition is bounded by EngineeringLimits and observable
+ * through events.
  *
  * The model never touches the filesystem or the shell. It produces
- * structured JSON; Zod validates it; the PermissionManager gates it.
+ * structured JSON; Zod validates it; the PermissionManager and the
+ * CommandPolicy decide; the sandbox constrains.
  */
 export interface EngineeringLoopOptions {
   provider: LLMProvider
@@ -59,6 +71,14 @@ export interface EngineeringLoopOptions {
   permissions?: PermissionManager
   /** Consulted when the policy says 'ask'. Defaults to denyAll. */
   approval?: ApprovalHandler
+  /** Command gate (Phase 4). Consulted for 'ask' commands. Defaults to denyCommand. */
+  commandApproval?: CommandApprovalHandler
+  /** `--yes` trusted mode for the command policy (review-class auto-allow). */
+  trusted?: boolean
+  /** Project command policy overlay. Defaults to `.lunar/policy.json` when present. */
+  projectPolicy?: ProjectPolicy
+  /** Sandbox backend (defaults to the best available: restricted). */
+  sandbox?: SandboxProvider
   /** Read-only tools for research turns (defaults to the Phase 2 registry). */
   tools?: ReturnType<typeof createDefaultToolRegistry>
   /** Explicit verification command (else detected from the repository). */
@@ -150,6 +170,7 @@ export class EngineeringLoop {
   private readonly runtime: AgentRuntime
   private readonly mutation: MutationManager
   private readonly verification: VerificationManager
+  private readonly sandbox: SandboxProvider
   /** Active event handler for the current run (constructor default). */
   private runHandler: EngineeringEventHandler
 
@@ -181,16 +202,36 @@ export class EngineeringLoop {
     })
 
     this.mutation = new MutationManager({ limits: this.limits, logger: this.logger })
+    // Phase 4 command pipeline: classify → policy → permission →
+    // sandbox → execute. The project policy (untrusted repo content)
+    // may only tighten; a malformed one fails closed at load time.
+    const projectPolicy =
+      options.projectPolicy !== undefined
+        ? options.projectPolicy
+        : loadProjectPolicy(options.workspace.root)
+    this.sandbox = options.sandbox ?? createSandbox('auto', { logger: this.logger })
     const executor = new CommandExecutor({
       workspace: options.workspace,
       limits: this.limits,
       logger: this.logger,
+      policy: new CommandPolicy({
+        trusted: options.trusted === true,
+        ...(projectPolicy !== undefined ? { project: projectPolicy } : {}),
+      }),
+      approval: options.commandApproval ?? denyCommand,
+      sandbox: this.sandbox,
+      onAudit: this.forwardAuditEvent,
     })
     this.verification = new VerificationManager({
       workspace: options.workspace,
       executor,
       ...(options.testCommand !== undefined ? { command: options.testCommand } : {}),
     })
+  }
+
+  /** The honest sandbox posture — surfaced in the CLI banner and doctor. */
+  sandboxDescription(): SandboxDescription {
+    return this.sandbox.describe()
   }
 
   /** Run the full loop for one task. Bounded on every axis. */
@@ -500,6 +541,60 @@ export class EngineeringLoop {
         success: event.success,
         summary: event.summary,
       })
+    }
+  }
+
+  /**
+   * Map executor audit events (Phase 4) onto observable loop events.
+   * The full audit trail also lands in the debug log via the executor.
+   */
+  private readonly forwardAuditEvent = (event: CommandAuditEvent): void => {
+    switch (event.type) {
+      case 'proposed':
+        this.emit({ type: 'command_proposed', command: event.command })
+        return
+      case 'policy_evaluated':
+        if (event.decision !== undefined && event.risk !== undefined) {
+          this.emit({
+            type: 'command_decision',
+            command: event.command,
+            risk: event.risk,
+            decision: event.decision,
+            reason: event.reason ?? '',
+          })
+        }
+        return
+      case 'blocked':
+        if (event.risk !== undefined) {
+          this.emit({
+            type: 'command_blocked',
+            command: event.command,
+            risk: event.risk,
+            reason: event.reason ?? '',
+          })
+        }
+        return
+      case 'started':
+        this.emit({
+          type: 'command_started',
+          command: event.command,
+          sandbox: event.sandbox ?? 'UNKNOWN',
+        })
+        return
+      case 'completed':
+        this.emit({
+          type: 'command_completed',
+          command: event.command,
+          exitCode: event.exitCode ?? null,
+          durationMs: event.durationMs ?? 0,
+          timedOut: event.timedOut ?? false,
+          truncated: event.truncated ?? false,
+        })
+        return
+      default:
+        // normalized / classified / permission_* / sandbox_prepared /
+        // timed_out: visible in --debug through the executor's own log.
+        return
     }
   }
 

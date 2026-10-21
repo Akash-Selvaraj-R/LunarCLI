@@ -36,6 +36,13 @@ export async function runEngineer(options: EngineerOptions): Promise<number> {
   stdout(`${theme.brand('☾ Lunar')} ${theme.muted(`v${version}`)}`)
   stdout(theme.bold('Autonomous Engineering'))
   stdout('')
+  const sandbox = loop.sandboxDescription()
+  stdout(
+    theme.muted(
+      `Sandbox: ${sandbox.label} · Network: DENIED · Commands: policy-classified`,
+    ),
+  )
+  stdout('')
 
   const render = createRenderer()
   const outcome = await loop.run(task, { onEvent: render })
@@ -171,6 +178,44 @@ function renderEvent(
       stdout(theme.bold('VERIFYING'))
       if (event.command !== undefined) stdout(`  $ ${event.command}`)
       return
+
+    // ── Phase 4 command security pipeline ──────────────────────────
+    case 'command_decision':
+      // Only surface decisions that lead to a prompt or a block.
+      if (event.decision === 'ask') {
+        stdout(theme.muted(`  ${event.command} — ${event.risk.toUpperCase()}, approval required`))
+      }
+      return
+
+    case 'command_blocked':
+      stdout('')
+      stdout(theme.warning('☾ Lunar blocked this command:'))
+      stdout(`  ${event.command}`)
+      stdout(`Risk: ${event.risk.toUpperCase()}`)
+      if (event.reason !== '') {
+        stdout('Reason:')
+        stdout(event.reason)
+      }
+      stdout('')
+      return
+
+    case 'command_started':
+      stdout(theme.muted(`  sandbox: ${event.sandbox}`))
+      return
+
+    case 'command_completed': {
+      const status = event.timedOut
+        ? theme.warning('timed out')
+        : event.exitCode === 0
+          ? theme.success('ok')
+          : theme.error(`exit ${event.exitCode ?? 'null'}`)
+      stdout(
+        theme.muted(
+          `  ${event.command} — ${status} (${(event.durationMs / 1000).toFixed(1)}s)`,
+        ),
+      )
+      return
+    }
 
     case 'verification_passed':
       printTestSummary(event.result.testSummary)

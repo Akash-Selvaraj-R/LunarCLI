@@ -20,9 +20,11 @@ import { resolveProvider } from '../providers/resolve.js'
 import { createDefaultToolRegistry } from '../tools/defaults.js'
 import { detectWorkspace } from '../workspace/detector.js'
 import { AgentRuntime } from '../agent/runtime.js'
-import { autoApprove, readlineApprover } from '../engineering/approval.js'
+import { autoApprove, readlineApprover, readlineCommandApprover } from '../engineering/approval.js'
 import { resolveLimits } from '../engineering/limits.js'
+import { createSandbox } from '../engineering/sandbox.js'
 import { EngineeringLoop } from '../engineering/loop.js'
+import { resolveSecuritySettings } from '../security/settings.js'
 import { printError } from './output.js'
 import { buildProgram } from './program.js'
 import { runDoctor } from './commands/doctor.js'
@@ -70,6 +72,7 @@ async function main(): Promise<void> {
           return
         }
         const trusted = yes === true
+        const security = resolveSecuritySettings(config.security)
         const loop = new EngineeringLoop({
           provider: resolved.provider,
           model: resolved.model,
@@ -81,6 +84,12 @@ async function main(): Promise<void> {
           // default, explicit trusted mode only via --yes.
           permissions: new PermissionManager(trusted ? PHASE3_AUTO_POLICY : PHASE3_ASK_POLICY),
           approval: trusted ? autoApprove : readlineApprover(),
+          // Phase 4 command pipeline: trusted mode auto-approves only
+          // REVIEW-class commands; dangerous still prompts, denied
+          // stays denied. Non-interactive stdin fails closed.
+          trusted,
+          commandApproval: readlineCommandApprover(),
+          sandbox: createSandbox(security.sandbox, { logger }),
         })
         process.exitCode = await runEngineer({ task, loop, version, logger })
         return

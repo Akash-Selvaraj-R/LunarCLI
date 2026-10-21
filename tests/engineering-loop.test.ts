@@ -9,7 +9,7 @@ import type { Workspace } from '../src/domain/types/workspace.js'
 import { MockProvider } from '../src/providers/mock.js'
 import { createSilentLogger } from '../src/logging/logger.js'
 import { PermissionManager, PHASE3_ASK_POLICY, PHASE3_AUTO_POLICY } from '../src/permissions/permission-manager.js'
-import { autoApprove, denyAll } from '../src/engineering/approval.js'
+import { autoApprove, autoCommandApprove, denyAll } from '../src/engineering/approval.js'
 import type { ApprovalHandler, ApprovalRequest } from '../src/engineering/approval.js'
 import { EngineeringLoop } from '../src/engineering/loop.js'
 import type { EngineeringEvent } from '../src/engineering/events.js'
@@ -115,6 +115,9 @@ function loopWith(
     logger: createSilentLogger(),
     permissions: new PermissionManager(PHASE3_AUTO_POLICY),
     approval: autoApprove,
+    // Phase 4: the harness explicitly approves its REVIEW-class
+    // verification command (node -e), keeping assertions unchanged.
+    commandApproval: autoCommandApprove,
     testCommand: checkCommand('src/health.js', 'OK'),
     onEvent: collect,
     ...overrides,
