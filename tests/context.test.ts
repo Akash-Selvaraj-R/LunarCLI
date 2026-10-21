@@ -21,13 +21,29 @@ const plainWorkspace: Workspace = {
 }
 
 describe('buildSystemPrompt', () => {
-  it('establishes Lunar identity and Phase 1 constraints', () => {
+  it('establishes Lunar identity and Phase 2 constraints', () => {
     const prompt = buildSystemPrompt({ workspace: repoWorkspace })
     expect(prompt).toContain('You are Lunar, a terminal-native AI engineering agent.')
-    expect(prompt).toContain('Phase 1')
+    expect(prompt).toContain('Phase 2')
     expect(prompt).toContain('do NOT have permission to execute commands')
     expect(prompt).toContain('modify files')
     expect(prompt).toContain('say so clearly')
+  })
+
+  it('advertises the available tools and the read-only promise', () => {
+    const prompt = buildSystemPrompt({
+      workspace: repoWorkspace,
+      toolNames: ['list_directory', 'read_file'],
+    })
+    expect(prompt).toContain('READ-ONLY inspection tools')
+    expect(prompt).toContain('list_directory')
+    expect(prompt).toContain('read_file')
+    expect(prompt).toContain('Never claim you performed an action you cannot perform')
+  })
+
+  it('mentions no tools when none are available', () => {
+    const prompt = buildSystemPrompt({ workspace: repoWorkspace })
+    expect(prompt).not.toContain('READ-ONLY inspection tools')
   })
 
   it('includes real workspace metadata only', () => {

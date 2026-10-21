@@ -46,23 +46,43 @@ export async function runTask(options: TaskOptions): Promise<void> {
   process.on('SIGINT', onSigint)
 
   let firstDelta = true
+  const clearThinking = (): void => {
+    if (!firstDelta) return
+    firstDelta = false
+    // Replace the "thinking..." line with real activity.
+    if (process.stdout.isTTY === true) clearLine()
+    else stdout('')
+  }
   const result = await agent.run(task, {
     signal: controller.signal,
     onEvent: (event) => {
+      if (event.type === 'tool_call') {
+        // Compact tool activity: one line per call, args dimmed.
+        clearThinking()
+        stdout(`${theme.accent('◇')} ${event.name}`)
+        const args = Object.entries(event.arguments)
+          .filter(([, value]) => value !== undefined)
+          .slice(0, 3)
+          .map(
+            ([key, value]) =>
+              `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`,
+          )
+        if (args.length > 0) stdout(theme.muted(`  ${args.join('  ')}`))
+        return
+      }
+      if (event.type === 'tool_result') {
+        const prefix = event.success ? theme.success('✓') : theme.error('✗')
+        stdout(`${prefix} ${theme.muted(event.summary)}`)
+        return
+      }
       if (event.type === 'delta') {
-        if (firstDelta) {
-          firstDelta = false
-          // Replace the "thinking..." line with the streamed answer.
-          if (process.stdout.isTTY === true) clearLine()
-          else stdout('')
-        }
+        clearThinking()
         stdoutChunk(event.text)
         return
       }
       // Providers without streaming deliver the whole text at once.
       if (event.type === 'response' && firstDelta) {
-        firstDelta = false
-        if (process.stdout.isTTY === true) clearLine()
+        clearThinking()
         stdoutChunk(event.text)
       }
     },

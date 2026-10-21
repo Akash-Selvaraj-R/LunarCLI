@@ -15,6 +15,12 @@ export interface Message {
   readonly role: Role
   readonly content: string
   readonly timestamp: number
+  /** Tool invocations this assistant message requested (assistant only). */
+  readonly toolCalls?: readonly ToolCall[]
+  /** Id of the tool call this message reports back (tool only). */
+  readonly toolCallId?: string
+  /** Name of the tool this message reports back (tool only). */
+  readonly toolName?: string
 }
 
 /** An identified conversation between the user and the agent. */
@@ -62,15 +68,28 @@ export interface Model {
 /** A tool invocation requested by the model. */
 export interface ToolCall {
   readonly id: string
-  /** Registered tool name, e.g. "shell". */
+  /** Registered tool name, e.g. "read_file". */
   readonly name: string
-  /** Parsed arguments (empty object when the model supplied none). */
+  /** Raw arguments as supplied by the model (validated before execution). */
   readonly arguments: Record<string, unknown>
+}
+
+/** Structured failure of a tool execution, safe to hand back to the model. */
+export interface ToolErrorInfo {
+  /** Machine-readable failure kind, e.g. "file_not_found". */
+  readonly kind: string
+  /** Human-readable (and model-readable) description. */
+  readonly message: string
+  /** Actionable suggestion, when one exists. */
+  readonly hint?: string
 }
 
 /** Result of invoking a tool on behalf of the agent. */
 export interface ToolResult {
   readonly toolCallId: string
   readonly success: boolean
-  readonly output: string
+  /** Structured output (provider adapters serialize it for the model). */
+  readonly output: unknown
+  /** Present when success is false. */
+  readonly error?: ToolErrorInfo
 }

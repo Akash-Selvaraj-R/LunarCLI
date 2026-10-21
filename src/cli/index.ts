@@ -15,7 +15,9 @@ import { fileURLToPath } from 'node:url'
 import { describeConfig, loadConfig } from '../config/config.js'
 import { LunarError } from '../domain/errors/index.js'
 import { createLogger } from '../logging/logger.js'
+import { PermissionManager } from '../permissions/permission-manager.js'
 import { resolveProvider } from '../providers/resolve.js'
+import { createDefaultToolRegistry } from '../tools/defaults.js'
 import { detectWorkspace } from '../workspace/detector.js'
 import { AgentRuntime } from '../agent/runtime.js'
 import { printError } from './output.js'
@@ -59,6 +61,9 @@ async function main(): Promise<void> {
         workspace,
         logger,
         version,
+        // Phase 2: read-only engineering tools behind the permission gate.
+        tools: createDefaultToolRegistry(),
+        permissions: new PermissionManager(),
       })
 
       if (task !== undefined) {

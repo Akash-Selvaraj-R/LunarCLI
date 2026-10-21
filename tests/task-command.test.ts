@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 
 import { runTask } from '../src/cli/commands/task.js'
 import { AgentRuntime } from '../src/agent/runtime.js'
 import { MockProvider } from '../src/providers/mock.js'
 import { createSilentLogger } from '../src/logging/logger.js'
+import { ToolRegistry } from '../src/tools/registry.js'
+import { ToolRisk } from '../src/tools/risk.js'
 import type { Workspace } from '../src/domain/types/workspace.js'
 
 const workspace: Workspace = {
@@ -18,6 +21,7 @@ async function runOneShot(
   task: string,
   provider: MockProvider,
   debug = false,
+  tools?: ToolRegistry,
 ): Promise<{ output: string; exitCode: number | undefined }> {
   const chunks: string[] = []
   const capture = (chunk: string | Uint8Array): boolean => {
@@ -41,6 +45,7 @@ async function runOneShot(
       workspace,
       logger: createSilentLogger(),
       version: '0.0.0-test',
+      ...(tools ? { tools } : {}),
     })
     await runTask({
       task,
@@ -105,5 +110,34 @@ describe('lunar "<task>" (one-shot mode)', () => {
     expect(debug.output).toContain('tokens')
     expect(debug.output).toContain('input 7')
     expect(debug.output).toContain('total 10')
+  })
+
+  it('shows tool activity during a one-shot run', async () => {
+    const registry = new ToolRegistry()
+    registry.register({
+      name: 'git_status',
+      description: 'Status',
+      risk: ToolRisk.SAFE,
+      inputSchema: z.object({}),
+      execute: async (call) => ({
+        toolCallId: call.id,
+        success: true,
+        output: { branch: 'main', clean: true },
+      }),
+      summarize: () => 'clean on main',
+    })
+    const provider = new MockProvider({
+      script: [
+        { toolCalls: [{ id: 'c1', name: 'git_status', arguments: {} }] },
+        { response: 'The working tree is clean.' },
+      ],
+    })
+    const { output } = await runOneShot('what changed in git?', provider, false, registry)
+
+    expect(output).toContain('◇')
+    expect(output).toContain('git_status')
+    expect(output).toContain('✓')
+    expect(output).toContain('clean on main')
+    expect(output).toContain('The working tree is clean.')
   })
 })

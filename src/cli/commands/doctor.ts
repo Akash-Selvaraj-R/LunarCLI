@@ -74,6 +74,6 @@ export async function runDoctor(options: DoctorOptions): Promise<void> {
   stdout('')
   stdout(`${theme.muted('version')}   ${version}`)
   stdout('')
-  stdout(`${theme.success('Status:')} AGENT CORE READY (Phase 1)`)
+  stdout(`${theme.success('Status:')} ENGINEERING TOOLS READY (Phase 2)`)
   stdout('')
 }

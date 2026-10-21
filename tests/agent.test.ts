@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { z } from 'zod'
 
 import { AgentRuntime } from '../src/agent/runtime.js'
 import type { AgentEvent } from '../src/agent/events.js'
@@ -7,6 +8,8 @@ import { createMessage } from '../src/domain/models/session.js'
 import { MockProvider } from '../src/providers/mock.js'
 import type { LLMProvider, LLMRequest, LLMResponse } from '../src/providers/types.js'
 import { ToolRegistry } from '../src/tools/registry.js'
+import { ToolRisk } from '../src/tools/risk.js'
+import type { Tool } from '../src/tools/types.js'
 import type { Workspace } from '../src/domain/types/workspace.js'
 
 const workspace: Workspace = {
@@ -16,12 +19,17 @@ const workspace: Workspace = {
   git: { isRepository: true, root: '/repo', branch: 'main' },
 }
 
-function makeRuntime(provider: MockProvider, tools?: ToolRegistry): AgentRuntime {
+function makeRuntime(
+  provider: MockProvider,
+  tools?: ToolRegistry,
+  extra?: { maxToolIterations?: number },
+): AgentRuntime {
   return new AgentRuntime({
     provider,
     model: provider.defaultModel,
     workspace,
     ...(tools ? { tools } : {}),
+    ...(extra ? extra : {}),
   })
 }
 
@@ -207,45 +215,232 @@ describe('AgentRuntime — cancellation', () => {
   })
 })
 
-describe('AgentRuntime — tool-call foundation', () => {
-  it('refuses model tool calls and executes nothing', async () => {
-    const provider = new MockProvider({
-      response: 'I wanted to run something',
-      toolCalls: [{ id: 'call_1', name: 'shell', arguments: { command: 'rm -rf /' } }],
+describe('AgentRuntime — tool-call loop', () => {
+  it('executes a permitted tool call and returns the final answer', async () => {
+    const registry = new ToolRegistry()
+    const executions: Array<{ id: string; input: unknown }> = []
+    registry.register({
+      name: 'echo_tool',
+      description: 'Echo the input back.',
+      risk: ToolRisk.SAFE,
+      inputSchema: z.object({ text: z.string() }),
+      execute: async (call) => {
+        executions.push({ id: call.id, input: call.input })
+        return {
+          toolCallId: call.id,
+          success: true,
+          output: { echoed: (call.input as { text: string }).text },
+        }
+      },
+      summarize: () => 'echoed',
     })
-    const tools = new ToolRegistry()
+    const provider = new MockProvider({
+      script: [
+        { toolCalls: [{ id: 'call_1', name: 'echo_tool', arguments: { text: 'hello' } }] },
+        { response: 'The tool said hello.' },
+      ],
+    })
+    const agent = makeRuntime(provider, registry)
+    const { events, onEvent } = recorder()
+
+    const result = await agent.run('use the tool', { onEvent })
+
+    expect(result.status).toBe('completed')
+    expect(result.text).toBe('The tool said hello.')
+    expect(executions).toEqual([{ id: 'call_1', input: { text: 'hello' } }])
+
+    // Tool activity events for the UI.
+    expect(events).toContainEqual({
+      type: 'tool_call',
+      id: 'call_1',
+      name: 'echo_tool',
+      arguments: { text: 'hello' },
+    })
+    expect(events).toContainEqual({
+      type: 'tool_result',
+      toolCallId: 'call_1',
+      name: 'echo_tool',
+      success: true,
+      summary: 'echoed',
+    })
+
+    // Conversation carries the tool exchange into the next request:
+    // assistant (tool call) → tool (result) → assistant (final).
+    const secondCall = provider.calls[1]!
+    const roles = secondCall.messages.map((m) => m.role)
+    expect(roles).toEqual(['system', 'user', 'assistant', 'tool'])
+    expect(secondCall.messages[2]?.toolCalls).toEqual([
+      { id: 'call_1', name: 'echo_tool', arguments: { text: 'hello' } },
+    ])
+    expect(secondCall.messages[3]?.toolCallId).toBe('call_1')
+    expect(secondCall.messages[3]?.toolName).toBe('echo_tool')
+    expect(secondCall.messages[3]?.content).toContain('hello')
+  })
+
+  it('supports multiple tool calls across multiple rounds in one request', async () => {
+    const registry = new ToolRegistry()
+    const executed: string[] = []
+    const makeTool = (name: string): Tool => ({
+      name,
+      description: name,
+      risk: ToolRisk.SAFE,
+      inputSchema: z.object({}),
+      execute: async (call) => {
+        executed.push(name)
+        return { toolCallId: call.id, success: true, output: { from: name } }
+      },
+    })
+    registry.register(makeTool('find_files'))
+    registry.register(makeTool('read_file'))
+    const provider = new MockProvider({
+      script: [
+        { toolCalls: [{ id: 'c1', name: 'find_files', arguments: {} }] },
+        { toolCalls: [{ id: 'c2', name: 'read_file', arguments: {} }] },
+        { response: 'After reading, here is the answer.' },
+      ],
+    })
+    const agent = makeRuntime(provider, registry)
+
+    const result = await agent.run('inspect auth', {})
+
+    expect(result.text).toBe('After reading, here is the answer.')
+    expect(executed).toEqual(['find_files', 'read_file'])
+    expect(provider.calls).toHaveLength(3)
+    // Round 2 sees both the first result and the second call.
+    expect(provider.calls[1]?.messages.at(-1)?.role).toBe('tool')
+    expect(provider.calls[2]?.messages.at(-1)?.content).toContain('read_file')
+  })
+
+  it('turns an unknown tool into a failed result the model can react to', async () => {
+    const provider = new MockProvider({
+      script: [
+        { toolCalls: [{ id: 'call_1', name: 'shell', arguments: { command: 'rm -rf /' } }] },
+        { response: 'I do not have a shell tool.' },
+      ],
+    })
+    const tools = new ToolRegistry() // empty — shell is not registered
     const agent = makeRuntime(provider, tools)
     const { events, onEvent } = recorder()
 
     const result = await agent.run('do something dangerous', { onEvent })
 
     expect(result.status).toBe('completed')
-    expect(result.text).toContain('shell')
-    expect(result.text).toContain('not available in Phase 1')
-    expect(result.text).toContain('No commands were executed')
+    expect(result.text).toBe('I do not have a shell tool.')
+    // The failure is a structured tool result, not an execution.
+    const failure = events.find(
+      (event): event is Extract<AgentEvent, { type: 'tool_result' }> =>
+        event.type === 'tool_result',
+    )
+    expect(failure).toMatchObject({ success: false, summary: 'tool_not_found' })
+    // The serialized error is what the model sees.
+    const toolMessage = provider.calls[1]?.messages.at(-1)
+    expect(toolMessage?.role).toBe('tool')
+    expect(toolMessage?.content).toContain('Unknown tool: shell')
+  })
 
-    // The refusal was recorded as the assistant message.
-    const last = agent.messages.at(-1)
-    expect(last?.role).toBe('assistant')
-    expect(last?.content).toBe(result.text)
+  it('refuses a mutating tool even when it is somehow registered', async () => {
+    const registry = new ToolRegistry()
+    let executed = false
+    registry.register({
+      name: 'write_file',
+      description: 'Should never run.',
+      risk: ToolRisk.MUTATING,
+      inputSchema: z.object({ path: z.string() }),
+      execute: async (call) => {
+        executed = true
+        return { toolCallId: call.id, success: true, output: {} }
+      },
+    })
+    const provider = new MockProvider({
+      script: [
+        { toolCalls: [{ id: 'c1', name: 'write_file', arguments: { path: 'x' } }] },
+        { response: 'That tool is not permitted.' },
+      ],
+    })
+    const agent = makeRuntime(provider, registry) // default PermissionManager
 
-    // Nothing executed; the registry is untouched and empty.
-    expect(tools.size).toBe(0)
+    await agent.run('write a file', {})
+
+    expect(executed).toBe(false)
+    const toolMessage = provider.calls[1]?.messages.at(-1)
+    expect(toolMessage?.content).toContain('not permitted')
+  })
+
+  it('stops safely when the tool iteration limit is reached', async () => {
+    const provider = new MockProvider({
+      toolCalls: [{ id: 'c', name: 'whatever', arguments: {} }], // every turn: tool call
+    })
+    const agent = makeRuntime(provider, undefined, { maxToolIterations: 3 })
+    const { events, onEvent } = recorder()
+
+    const result = await agent.run('loop forever', { onEvent })
+
+    expect(result.status).toBe('completed')
+    expect(result.text).toContain('Tool execution limit reached (3')
+    // One initial call + one per completed round, then the cap stops it.
+    expect(provider.calls.length).toBeLessThanOrEqual(4)
     expect(events.at(-1)).toMatchObject({ type: 'response' })
   })
 
-  it('advertises registered tools to the provider, but still never executes them', async () => {
+  it('cancels during tool execution', async () => {
+    const registry = new ToolRegistry()
+    registry.register({
+      name: 'slow_tool',
+      description: 'Takes a while.',
+      risk: ToolRisk.SAFE,
+      inputSchema: z.object({}),
+      execute: async (_call, context) => {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 500)
+          context.signal?.addEventListener('abort', () => {
+            clearTimeout(timer)
+            reject(new Error('aborted'))
+          })
+        })
+        return { toolCallId: 'x', success: true, output: {} }
+      },
+    })
+    const provider = new MockProvider({
+      toolCalls: [{ id: 'c1', name: 'slow_tool', arguments: {} }],
+    })
+    const agent = makeRuntime(provider, registry)
+    const controller = new AbortController()
+    const { events, onEvent } = recorder()
+
+    const promise = agent.run('slow tool please', { signal: controller.signal, onEvent })
+    setTimeout(() => controller.abort(), 20)
+    const result = await promise
+
+    expect(result.status).toBe('cancelled')
+    expect(events.at(-1)).toEqual({ type: 'cancelled' })
+  })
+
+  it('advertises registered tools to the provider with their definitions', async () => {
     const provider = new MockProvider({ response: 'ok' })
     const tools = new ToolRegistry()
     tools.register({
-      definition: { name: 'read_file', description: 'read', parameters: {} },
-      execute: async () => {
-        throw new Error('Phase 1 must never execute tools')
-      },
+      name: 'read_file',
+      description: 'Read a file',
+      risk: ToolRisk.READ_ONLY,
+      inputSchema: z.object({ path: z.string() }),
+      execute: async (call) => ({ toolCallId: call.id, success: true, output: 'x' }),
     })
     const agent = makeRuntime(provider, tools)
     await agent.run('read something')
     expect(provider.calls[0]?.tools?.map((t) => t.name)).toEqual(['read_file'])
+    // The system prompt advertises the tool by name.
+    expect(provider.calls[0]?.messages[0]?.content).toContain('read_file')
+  })
+
+  it('reports a parseable tool-call request with no calls as a soft failure', async () => {
+    const provider = new MockProvider({
+      finishReason: 'tool_calls',
+      response: 'confused',
+    })
+    const agent = makeRuntime(provider)
+    const result = await agent.run('weird response', {})
+    expect(result.status).toBe('completed')
+    expect(result.text).toContain('no valid tool call')
   })
 })
 

@@ -13,6 +13,10 @@ export type AgentEvent =
   | { type: 'status'; status: AgentStatus }
   /** Incremental streamed text (only when the provider streams). */
   | { type: 'delta'; text: string }
+  /** The runtime is about to request a tool invocation. */
+  | { type: 'tool_call'; id: string; name: string; arguments: Record<string, unknown> }
+  /** A tool invocation finished (successfully or not). */
+  | { type: 'tool_result'; toolCallId: string; name: string; success: boolean; summary: string }
   /** The turn finished; `text` is the complete assistant message. */
   | { type: 'response'; text: string; usage?: Usage }
   /** The provider failed; `error` is a safe, structured Lunar error. */

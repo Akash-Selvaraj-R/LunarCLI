@@ -12,11 +12,13 @@ language; Lunar reasons about it with a configured LLM, shows its answer
 as it streams, and (in later phases) will inspect your repository, plan
 the work, edit files, run tests, and verify the result.
 
-> **Status: Phase 1 — Agent Core.**
-> Lunar can now hold real conversations with a configured LLM provider —
-> interactively and in one-shot mode — with streaming, cancellation, and
-> conversation history. It **cannot** execute commands or modify files;
-> it has no tools. See [Roadmap](#roadmap).
+> **Status: Phase 2 — Engineering Tools.**
+> Lunar can hold real conversations with a configured LLM provider and
+> now **inspect your project through structured, read-only tools** —
+> list directories, read files, search text, find files, and inspect
+> git state — with a multi-turn tool loop, permission gating, and
+> workspace boundaries. It **cannot** execute commands or modify
+> anything; those tools do not exist. See [Roadmap](#roadmap).
 
 ## Vision
 
@@ -39,49 +41,78 @@ lunar "fix the authentication bug and make sure all tests pass"
 and have Lunar do the work — safely, transparently, and inside your
 existing terminal workflow.
 
-## Current Status (Phase 1 — Agent Core)
+## Current Status (Phase 2 — Engineering Tools)
 
 Implemented:
 
 - Interactive conversation with a configured LLM provider
-  (`lunar` → `lunar › …`, streamed responses)
-- One-shot mode: `lunar "explain this project"` runs the agent once and
-  prints the answer
-- Agent runtime (`src/agent/`) fully separated from the terminal UI —
-  testable without Ink
-- Conversation state (in-memory session; history is carried into every
-  subsequent request; the session disappears when Lunar exits)
-- Context assembly: system prompt + workspace identity + conversation
-  history (no file scanning, no repository indexing)
-- Real provider adapters over plain HTTP with SSE streaming:
-  OpenAI, Anthropic, Google Gemini — plus a deterministic `mock`
-  provider for tests and keyless smoke runs
-- Structured provider error handling: missing provider, missing API key,
-  invalid API key, rate limiting, unsupported model, network failure,
-  malformed responses — each with an actionable hint
-- Graceful cancellation: Ctrl+C during generation cancels the request
-  and returns to the prompt; Ctrl+D exits cleanly
-- Tool-calling **foundation** (registry, definitions, call/result types)
-  that executes **nothing** — an unexpected model tool call is refused
-- Secret redaction in logs, errors, and debug output (key names and
-  secret-shaped values)
-- Full test suite (unit + driven-terminal interactive tests), strict
-  TypeScript, ESLint, Prettier
+  (`lunar` → `lunar › …`, streamed responses) and one-shot mode
+  (`lunar "explain this project"`)
+- **Tool calling**: the model can request read-only inspection tools,
+  Lunar validates and executes them, results go back to the model, and
+  the model continues reasoning — multiple tool rounds per request,
+  hard-capped (20 rounds) so a loop can never run away
+- **Filesystem inspection**: `list_directory`, `read_file` (with line
+  ranges and size limits), `file_exists`
+- **Search**: `search_files` (fixed-string; ripgrep when installed,
+  controlled Node fallback otherwise) and `find_files` (glob or name
+  substring) — both workspace-bounded and result-capped
+- **Git inspection**: `git_status`, `git_diff` (size-capped with
+  truncation notice), `git_log` (bounded), `git_branch` — read-only,
+  via a fixed-argument adapter that never uses a shell
+- **Permission system**: every tool carries a risk level
+  (safe/read-only/mutating/dangerous); a centralized
+  `PermissionManager` allows safe+read-only and denies
+  mutating+dangerous
+- **Workspace path security**: realpath-based containment checks that
+  stop `../` traversal, absolute-path escapes, foreign Windows drives,
+  and symlink/junction escapes
+- Tool activity is visible in the terminal (`◇ tool` / `✓ result`);
+  `--debug` shows per-tool arguments (redacted), duration, and result
+  size
+- Tool failures are structured (`file_not_found`, `invalid_input`,
+  `path_outside_workspace`, …) and become tool results the model can
+  react to — a failing tool never crashes the agent
+- Provider tool formats (OpenAI `tool_calls`, Anthropic
+  `tool_use`/`tool_result`, Gemini `functionCall`/`functionResponse`)
+  are mapped inside provider adapters only
+- Everything from Phase 1: streaming, cancellation (Ctrl+C during model
+  requests _and_ tool execution), conversation history, structured
+  errors, secret redaction, deterministic tests
 
-Not implemented (by design, in later phases): tool execution, shell
-access, file modification, planning, autonomous loops, permissions,
-memory, MCP.
+### Tools
 
-### Phase 1 limits (deliberate)
+| Tool                           | Risk      | Status       |
+| ------------------------------ | --------- | ------------ |
+| `list_directory`               | safe      | enabled      |
+| `read_file`                    | read-only | enabled      |
+| `file_exists`                  | safe      | enabled      |
+| `search_files`                 | safe      | enabled      |
+| `find_files`                   | safe      | enabled      |
+| `git_status`                   | safe      | enabled      |
+| `git_diff`                     | read-only | enabled      |
+| `git_log`                      | safe      | enabled      |
+| `git_branch`                   | read-only | enabled      |
+| shell / `run_command`          | dangerous | **disabled** |
+| `write_file` / `edit_file`     | mutating  | **disabled** |
+| `delete_file`                  | mutating  | **disabled** |
+| git commit/push/checkout/reset | dangerous | **disabled** |
+
+Disabled tools do not exist as registered tools at all: a model that
+requests one receives a structured "unknown tool" result, and nothing
+happens on your machine.
+
+### Phase 2 limits (deliberate)
 
 ```text
-Lunar can:  read the context it was given, talk to the model, show answers
-Lunar can't: run commands, read/write files, mutate git, browse the web
+Lunar can:  list/read/search files in the workspace, inspect git state
+Lunar can't: run commands, write/edit/delete files, mutate git
 ```
 
-The model receives only the workspace identity (path, git repo/branch)
-and the conversation. There is no LLM → shell and no LLM → filesystem
-path of any kind.
+The model receives only the workspace identity (path, git repo/branch),
+the conversation, and the output of tools it invoked — all resolved
+inside the workspace. There is no LLM → shell and no LLM → filesystem
+mutation path of any kind. See [docs/architecture/security.md](docs/architecture/security.md).
 
 ## Installation
 
@@ -100,12 +131,31 @@ npm link        # makes `lunar` available on your PATH
 
 ```bash
 lunar                       # interactive terminal UI
+lunar "explain this project" # one-shot: answer a single question
 lunar --help                # usage
 lunar --version             # version
-lunar --debug               # verbose diagnostics on stderr
+lunar --debug               # verbose diagnostics (incl. tool timings)
 lunar --cwd <path>          # operate in a different directory
 lunar doctor                # installation health check
-lunar "explain this project" # send a one-shot task to the agent
+```
+
+Example interactive session (Phase 2):
+
+```text
+lunar › what files are in this project?
+
+◐ thinking...
+
+◇ list_directory
+  path: .
+✓ 12 entries in .
+
+◇ read_file
+  package.json
+
+✓ 51 lines in package.json
+
+Lunar › This is a TypeScript CLI project …
 ```
 
 ### Configuration
@@ -158,16 +208,23 @@ src/
 ├── domain/       Types, errors, models — the stable contract
 ├── config/       Zod schema, defaults, layered config loader
 ├── providers/    LLM abstraction, registry, HTTP/SSE adapters
-├── tools/        Tool architecture (registry only — nothing executes)
+├── tools/        Read-only tools, registry, executor, path security
+├── git/          Controlled read-only git adapter (no shell)
+├── permissions/  Permission manager (risk → allow/deny)
 ├── workspace/    Workspace + git detection
-├── permissions/  Permission engine placeholder (Phase 4)
 ├── logging/      Leveled logger with secret redaction
 └── utils/        Small shared helpers
+
+docs/architecture/
+├── agent-loop.md The tool-call loop and its invariants
+├── tools.md      Tool anatomy, the Phase 2 tool set, limits
+└── security.md   Threat model, layered defenses, path security
 ```
 
 Dependency rule: `cli` and `app` depend on `domain`/`config`/`providers`/`agent`;
 the agent depends on `providers` only through the `LLMProvider` interface —
-nothing outside `providers/` imports a concrete LLM SDK.
+nothing outside `providers/` imports a concrete LLM SDK, and nothing
+outside `tools/` touches the filesystem on the model's behalf.
 
 ## Development
 
@@ -191,10 +248,11 @@ npm run typecheck && npm run lint && npm test && npm run build
 From Phase 0 onward, these rules hold:
 
 - No secrets in logs, code, or the repository
-- No shell execution from user input
-- No LLM shell access, no automatic file modification
-- Future tool execution will run behind an explicit `PermissionManager`
-  abstraction that cannot be bypassed
+- No shell execution from user input or model output
+- No LLM shell access, no file modification, no git mutation
+- Every tool execution goes through risk classification and the
+  centralized `PermissionManager`; future approvals and sandboxing
+  (safety phase) plug into the same interface
 
 ## Roadmap
 
@@ -215,12 +273,13 @@ Phase 1 — Agent Core                ✓
 [x] Cancellation
 [x] Tool-call foundation (no execution)
 
-Phase 2 — Engineering Tools
-[ ] File tools
-[ ] Search
-[ ] Shell execution
-[ ] Git tools
-[ ] Test runner
+Phase 2 — Engineering Tools        ✓
+[x] Filesystem inspection (list/read/exists)
+[x] Search (text search + file finder)
+[x] Git inspection (status/diff/log/branch)
+[x] Tool-call loop (multi-turn, capped)
+[x] Permission system (risk classification)
+[x] Workspace path security
 
 Phase 3 — Autonomous Loop
 [ ] Observe → Act → Verify loop

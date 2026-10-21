@@ -41,6 +41,19 @@ function isPrintable(text: string): boolean {
   return true
 }
 
+/** Compact `key: value` summary of tool arguments (first 3, truncated). */
+function formatArgs(args: Record<string, unknown>): string {
+  return Object.entries(args)
+    .filter(([, value]) => value !== undefined)
+    .slice(0, 3)
+    .map(([key, value]) => {
+      const raw = typeof value === 'string' ? value : JSON.stringify(value)
+      const shortened = raw.length > 40 ? `${raw.slice(0, 40)}…` : raw
+      return `${key}: ${shortened}`
+    })
+    .join('  ')
+}
+
 export function App({
   config,
   workspace,
@@ -94,6 +107,21 @@ export function App({
                 ),
               )
             }
+            return
+          }
+          if (event.type === 'tool_call') {
+            addEntry({
+              kind: 'tool_call',
+              text: event.name,
+              args: formatArgs(event.arguments),
+            })
+            return
+          }
+          if (event.type === 'tool_result') {
+            addEntry({
+              kind: 'tool_result',
+              text: event.success ? event.summary : `${event.name} failed (${event.summary})`,
+            })
             return
           }
           if (event.type === 'response') {

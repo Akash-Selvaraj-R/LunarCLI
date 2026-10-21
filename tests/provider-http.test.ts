@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { ConfigurationError, ProviderError } from '../src/domain/errors/index.js'
+import { createMessage } from '../src/domain/models/session.js'
 import { AnthropicProvider } from '../src/providers/anthropic.js'
 import { GeminiProvider } from '../src/providers/gemini.js'
 import { OpenAIProvider } from '../src/providers/openai.js'
@@ -228,11 +229,26 @@ describe('AnthropicProvider', () => {
     expect(body['max_tokens']).toBeGreaterThan(0)
   })
 
-  it('reports tool_use as a tool call', async () => {
+  it('reports tool_use as a tool call, accumulating streamed input JSON', async () => {
     const { fetchImpl } = fakeFetch(
       sse([
         { type: 'message_start', message: { usage: { input_tokens: 5 } } },
-        { type: 'content_block_start', content_block: { type: 'tool_use', name: 'shell' } },
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_1', name: 'read_file' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: '{"pa' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: 'th":"src/a.ts"}' },
+        },
+        { type: 'content_block_stop', index: 0 },
         { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 2 } },
         { type: 'message_stop' },
       ]),
@@ -240,7 +256,52 @@ describe('AnthropicProvider', () => {
     const provider = new AnthropicProvider({ apiKey, fetch: fetchImpl })
     const response = await provider.generate({ model: 'claude-sonnet-4-5', messages })
     expect(response.finishReason).toBe('tool_calls')
-    expect(response.toolCalls?.[0]?.name).toBe('shell')
+    expect(response.toolCalls?.[0]).toEqual({
+      id: 'toolu_1',
+      name: 'read_file',
+      arguments: { path: 'src/a.ts' },
+    })
+  })
+
+  it('sends assistant tool calls and tool results as Anthropic content blocks', async () => {
+    const { fetchImpl, calls } = fakeFetch(sse([{ type: 'message_stop' }]))
+    const provider = new AnthropicProvider({ apiKey, fetch: fetchImpl })
+    await provider.generate({
+      model: 'claude-sonnet-4-5',
+      messages: [
+        createMessage('user', 'read a file'),
+        createMessage('assistant', '', {
+          toolCalls: [{ id: 'toolu_1', name: 'read_file', arguments: { path: 'a.ts' } }],
+        }),
+        createMessage('tool', '{"content":"hello"}', {
+          toolCallId: 'toolu_1',
+          toolName: 'read_file',
+        }),
+        createMessage('assistant', 'The file says hello.'),
+      ],
+    })
+
+    const body = JSON.parse(String(calls[0]?.init.body)) as { messages: unknown[] }
+    const [first, toolUse, toolResult, final] = body.messages as Array<{
+      role: string
+      content: unknown
+    }>
+    expect(first?.role).toBe('user')
+    expect(toolUse?.role).toBe('assistant')
+    expect(toolUse?.content).toEqual([
+      { type: 'tool_use', id: 'toolu_1', name: 'read_file', input: { path: 'a.ts' } },
+    ])
+    expect(toolResult?.role).toBe('user')
+    expect(toolResult?.content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'toolu_1',
+        content: '{"content":"hello"}',
+        is_error: false,
+      },
+    ])
+    expect(final?.role).toBe('assistant')
+    expect(final?.content).toEqual([{ type: 'text', text: 'The file says hello.' }])
   })
 
   it('maps missing credentials to a configuration error', async () => {

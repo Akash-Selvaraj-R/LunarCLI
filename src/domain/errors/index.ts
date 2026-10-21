@@ -8,7 +8,12 @@
  */
 
 export type LunarErrorCode =
-  'CLI_ERROR' | 'CONFIGURATION_ERROR' | 'PROVIDER_ERROR' | 'WORKSPACE_ERROR' | 'NOT_IMPLEMENTED'
+  | 'CLI_ERROR'
+  | 'CONFIGURATION_ERROR'
+  | 'PROVIDER_ERROR'
+  | 'WORKSPACE_ERROR'
+  | 'TOOL_ERROR'
+  | 'NOT_IMPLEMENTED'
 
 export interface LunarErrorOptions {
   /** Actionable suggestion shown to the user. */

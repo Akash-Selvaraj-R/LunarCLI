@@ -2,12 +2,15 @@ import { Readable, Writable } from 'node:stream'
 
 import { render } from 'ink'
 import { describe, expect, it } from 'vitest'
+import { z } from 'zod'
 
 import { App } from '../src/app/app.js'
 import { AgentRuntime } from '../src/agent/runtime.js'
 import type { LunarConfig } from '../src/config/schema.js'
 import { createSilentLogger } from '../src/logging/logger.js'
 import { MockProvider } from '../src/providers/mock.js'
+import { ToolRegistry } from '../src/tools/registry.js'
+import { ToolRisk } from '../src/tools/risk.js'
 import type { Workspace } from '../src/domain/types/workspace.js'
 
 /**
@@ -194,5 +197,66 @@ describe('interactive App (driven terminal)', () => {
     press(stdin, '\x04') // Ctrl+D
     await Promise.race([exitPromise, tick(2000)])
     expect(exited).toBe(true)
+  })
+})
+
+describe('interactive App — tool activity', () => {
+  it('renders tool calls and results, then the final answer', async () => {
+    const registry = new ToolRegistry()
+    registry.register({
+      name: 'list_directory',
+      description: 'List a directory',
+      risk: ToolRisk.SAFE,
+      inputSchema: z.object({ path: z.string() }),
+      execute: async (call) => ({
+        toolCallId: call.id,
+        success: true,
+        output: { entries: [{ name: 'src', type: 'directory' }] },
+      }),
+      summarize: () => '2 entries in .',
+    })
+    const provider = new MockProvider({
+      script: [
+        { toolCalls: [{ id: 'c1', name: 'list_directory', arguments: { path: '.' } }] },
+        { deltas: ['There ', 'is ', 'a ', 'src ', 'directory.'] },
+      ],
+    })
+    const stdin = makeStdin()
+    const stdout = new FakeStdout()
+    const agent = new AgentRuntime({
+      provider,
+      model: provider.defaultModel,
+      workspace,
+      tools: registry,
+    })
+    const instance = render(
+      <App
+        config={config}
+        workspace={workspace}
+        version="0.3.0"
+        logger={createSilentLogger()}
+        agent={agent}
+        interactive
+      />,
+      { stdin, stdout, patchConsole: false, exitOnCtrlC: false },
+    )
+    try {
+      press(stdin, 'what is in this project?')
+      await tick()
+      press(stdin, '\r')
+      await waitFor(() => stdout.text.includes('There is a src directory.'))
+
+      const output = stdout.text
+      // Tool activity, compact and visible.
+      expect(output).toContain('◇')
+      expect(output).toContain('list_directory')
+      expect(output).toContain('path: .')
+      expect(output).toContain('✓')
+      expect(output).toContain('2 entries in .')
+      // The final answer follows the tool activity.
+      expect(output).toContain('There is a src directory.')
+    } finally {
+      instance.unmount()
+    }
   })
 })

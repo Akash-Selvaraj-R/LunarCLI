@@ -13,6 +13,22 @@ import type { LLMRequest, LLMResponse, ProviderCallOptions, StreamCallbacks } fr
  * with no API key.
  */
 
+/** One scripted provider turn (used by `script` for multi-turn flows). */
+export interface MockTurn {
+  /** Text to respond with. */
+  response?: string
+  /** Explicit stream chunks (overrides `response` splitting). */
+  deltas?: readonly string[]
+  /** Tool calls for this turn (forces finishReason 'tool_calls'). */
+  toolCalls?: readonly ToolCall[]
+  /** When set, this turn rejects with the error. */
+  error?: Error
+  /** Usage to report for this turn. */
+  usage?: Partial<LLMResponse['usage']>
+  /** Reported finish reason for this turn (default: 'stop'). */
+  finishReason?: LLMResponse['finishReason']
+}
+
 export interface MockProviderOptions {
   /** Text to respond with (default: a canned mock notice). */
   response?: string
@@ -28,6 +44,12 @@ export interface MockProviderOptions {
   toolCalls?: readonly ToolCall[]
   /** Explicit stream chunks; defaults to splitting `response` after spaces. */
   deltas?: readonly string[]
+  /**
+   * Multi-turn script: each call consumes the next entry (falls back to
+   * the static options above once exhausted). Lets tests simulate a
+   * tool-call → result → final-answer sequence deterministically.
+   */
+  script?: readonly MockTurn[]
 }
 
 const DEFAULT_RESPONSE = 'Mock response from LunarCLI built-in test provider.'
@@ -71,27 +93,42 @@ export class MockProvider extends BaseProvider {
   readonly calls: LLMRequest[] = []
 
   private readonly mock: MockProviderOptions
+  private turnIndex = 0
 
   constructor(options: MockProviderOptions = {}) {
     super({})
     this.mock = options
   }
 
-  private check(request: LLMRequest): void {
-    this.validateRequest(request)
-    this.calls.push(request)
-    if (this.mock.error !== undefined) throw this.mock.error
+  /** The effective turn for this call (script entry, or static defaults). */
+  private nextTurn(): MockTurn {
+    const script = this.mock.script
+    const scripted = script !== undefined ? script[this.turnIndex] : undefined
+    this.turnIndex += 1
+    return scripted ?? {}
   }
 
-  private buildResponse(): LLMResponse {
+  private check(request: LLMRequest, turn: MockTurn): void {
+    this.validateRequest(request)
+    this.calls.push(request)
+    const error = turn.error ?? this.mock.error
+    if (error !== undefined) throw error
+  }
+
+  private buildResponse(turn: MockTurn): LLMResponse {
     // Keep the final text consistent with what was streamed.
-    const text = this.mock.response ?? this.mock.deltas?.join('') ?? DEFAULT_RESPONSE
-    const toolCalls = this.mock.toolCalls
+    const text =
+      turn.response ??
+      turn.deltas?.join('') ??
+      this.mock.response ??
+      this.mock.deltas?.join('') ??
+      DEFAULT_RESPONSE
+    const toolCalls = turn.toolCalls ?? this.mock.toolCalls
     const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0
     const finishReason: LLMResponse['finishReason'] = hasToolCalls
       ? 'tool_calls'
-      : (this.mock.finishReason ?? 'stop')
-    const usage = this.mock.usage
+      : (turn.finishReason ?? this.mock.finishReason ?? 'stop')
+    const usage = turn.usage ?? this.mock.usage
     return {
       message: createMessage('assistant', text),
       ...(usage !== undefined
@@ -110,10 +147,11 @@ export class MockProvider extends BaseProvider {
   }
 
   async generate(request: LLMRequest, options?: ProviderCallOptions): Promise<LLMResponse> {
-    this.check(request)
+    const turn = this.nextTurn()
+    this.check(request, turn)
     await delay(this.mock.delayMs ?? 0, options?.signal)
     throwIfAborted(options?.signal)
-    return this.buildResponse()
+    return this.buildResponse(turn)
   }
 
   async stream(
@@ -121,16 +159,17 @@ export class MockProvider extends BaseProvider {
     callbacks: StreamCallbacks,
     options: ProviderCallOptions = {},
   ): Promise<LLMResponse> {
-    this.check(request)
-    const deltas =
-      this.mock.deltas ?? (this.mock.response ?? DEFAULT_RESPONSE).split(/(?<= )/).filter(Boolean)
+    const turn = this.nextTurn()
+    this.check(request, turn)
+    const baseText = turn.response ?? this.mock.response ?? DEFAULT_RESPONSE
+    const deltas = turn.deltas ?? this.mock.deltas ?? baseText.split(/(?<= )/).filter(Boolean)
 
     for (const delta of deltas) {
       await delay(this.mock.delayMs ?? 0, options.signal)
       throwIfAborted(options.signal)
       callbacks.onText(delta)
     }
-    return this.buildResponse()
+    return this.buildResponse(turn)
   }
 }
 

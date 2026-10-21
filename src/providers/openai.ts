@@ -22,12 +22,44 @@ import type {
 
 const API_URL = 'https://api.openai.com/v1/chat/completions'
 
+/**
+ * Normalized → OpenAI wire format.
+ *
+ * Provider-specific shapes stay inside adapters: the agent only ever
+ * produces/consumes normalized `Message`/`ToolCall`/`ToolResult`.
+ */
+function toOpenAIMessage(message: Message): unknown {
+  if (message.role === 'tool') {
+    return { role: 'tool', tool_call_id: message.toolCallId ?? '', content: message.content }
+  }
+  if (
+    message.role === 'assistant' &&
+    message.toolCalls !== undefined &&
+    message.toolCalls.length > 0
+  ) {
+    return {
+      role: 'assistant',
+      content: message.content !== '' ? message.content : null,
+      tool_calls: message.toolCalls.map((call) => ({
+        id: call.id,
+        type: 'function',
+        function: { name: call.name, arguments: JSON.stringify(call.arguments) },
+      })),
+    }
+  }
+  return { role: message.role, content: message.content }
+}
+
 interface OpenAIChunk {
   error?: { message?: string }
   choices?: Array<{
     delta?: {
       content?: string
-      tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>
+      tool_calls?: Array<{
+        index?: number
+        id?: string
+        function?: { name?: string; arguments?: string }
+      }>
     }
     finish_reason?: string | null
   }>
@@ -85,10 +117,7 @@ export class OpenAIProvider extends BaseProvider {
       headers: { authorization: `Bearer ${apiKey}` },
       body: {
         model: request.model,
-        messages: request.messages.map((message: Message) => ({
-          role: message.role,
-          content: message.content,
-        })),
+        messages: request.messages.map(toOpenAIMessage),
         stream: true,
         stream_options: { include_usage: true },
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
@@ -110,7 +139,8 @@ export class OpenAIProvider extends BaseProvider {
     let content = ''
     let finishReason: LLMResponse['finishReason'] = 'stop'
     let usage: LLMResponse['usage']
-    const toolCalls: ToolCall[] = []
+    // Tool-call fragments arrive across chunks, keyed by index.
+    const toolCallFragments = new Map<number, { id?: string; name: string; args: string }>()
 
     for await (const data of sseData(response.body)) {
       if (data === '[DONE]') break
@@ -128,12 +158,13 @@ export class OpenAIProvider extends BaseProvider {
         content += delta.content
         callbacks.onText(delta.content)
       }
-      for (const call of delta?.tool_calls ?? []) {
-        toolCalls.push({
-          id: call.id ?? `tool-${toolCalls.length}`,
-          name: call.function?.name ?? '',
-          arguments: parseArguments(call.function?.arguments),
-        })
+      for (const fragment of delta?.tool_calls ?? []) {
+        const index = fragment.index ?? 0
+        const entry = toolCallFragments.get(index) ?? { name: '', args: '' }
+        if (fragment.id !== undefined) entry.id = fragment.id
+        if (fragment.function?.name !== undefined) entry.name += fragment.function.name
+        if (fragment.function?.arguments !== undefined) entry.args += fragment.function.arguments
+        toolCallFragments.set(index, entry)
       }
       if (choice?.finish_reason != null) finishReason = toFinishReason(choice.finish_reason)
 
@@ -145,6 +176,14 @@ export class OpenAIProvider extends BaseProvider {
         }
       }
     }
+
+    const toolCalls: ToolCall[] = [...toolCallFragments.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, entry], index) => ({
+        id: entry.id ?? `tool-${index}`,
+        name: entry.name,
+        arguments: parseArguments(entry.args),
+      }))
 
     return {
       message: createMessage('assistant', content),

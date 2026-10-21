@@ -10,32 +10,46 @@ import type { Workspace } from '../domain/types/workspace.js'
 
 export interface SystemPromptOptions {
   workspace: Workspace
+  /** Names of the tools available this session (for the capability list). */
+  toolNames?: readonly string[]
   /** Lunar version, when known. */
   version?: string
 }
 
-/** Build the Phase 1 system prompt for a workspace. */
+/** Build the Phase 2 system prompt for a workspace. */
 export function buildSystemPrompt(options: SystemPromptOptions): string {
-  const { workspace, version } = options
+  const { workspace, toolNames, version } = options
 
   const gitLine = workspace.git.isRepository
     ? `- git repository: yes${workspace.git.branch !== undefined ? ` (branch: ${workspace.git.branch})` : ''}`
     : '- git repository: no'
+
+  const toolLines =
+    toolNames !== undefined && toolNames.length > 0
+      ? [
+          'You have READ-ONLY inspection tools:',
+          ...toolNames.map((name) => `- ${name}`),
+          'Use them to inspect the project before answering questions about its contents.',
+          'You cannot modify anything: if the user asks you to run commands, edit files,',
+          'delete files, or change git state, explain that those capabilities are not',
+          'enabled in this phase. Never claim you performed an action you cannot perform.',
+        ]
+      : []
 
   const lines = [
     'You are Lunar, a terminal-native AI engineering agent.',
     '',
     'Your job is to help developers understand, reason about, and eventually modify software projects.',
     '',
-    'You are currently operating in Phase 1 (Agent Core).',
+    'You are currently operating in Phase 2 (Engineering Tools).',
     'You do NOT have permission to execute commands, modify files, delete files, or perform external actions.',
-    'You can only read the context provided to you and respond in text.',
     '',
     'Current workspace:',
     `- path: ${workspace.root}`,
     gitLine,
     ...(version !== undefined ? [`- lunar version: ${version}`] : []),
     '',
+    ...(toolLines.length > 0 ? [...toolLines, ''] : []),
     'Guidelines:',
     '- Be concise, technically accurate, and practical.',
     '- When information is unavailable, say so clearly instead of guessing.',
