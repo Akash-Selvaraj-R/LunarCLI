@@ -3,146 +3,28 @@
 **AI engineering agent for your terminal.**
 
 ```text
-◐ LUNARCLI
+☾ LUNAR
 ```
 
-LunarCLI is an autonomous AI software-engineering agent that runs directly
-inside your developer terminal. You describe what you want in plain
-language; Lunar reasons about it with a configured LLM, shows its answer
-as it streams, and (in later phases) will inspect your repository, plan
-the work, edit files, run tests, and verify the result.
+LunarCLI is an AI engineering agent that runs in your terminal.
+
+It can inspect a repository, reason about the codebase, create a
+structured engineering plan, propose file changes, show a diff, obtain
+permission, apply approved changes atomically, run controlled
+verification, diagnose failures, and perform bounded corrective
+iterations.
 
 > **Status: Phase 3 — Autonomous Engineering Loop.**
-> Lunar can inspect your project with structured, read-only tools AND,
-> in explicit `--engineer` mode, run a **bounded autonomous loop**: it
-> plans the change, proposes structured file edits, shows you a diff,
-> asks for approval, applies atomically, runs controlled verification,
-> and — on failure — diagnoses and proposes a fix. Git commit/push and
-> unrestricted network access are **not implemented**. See
-> [Roadmap](#roadmap).
-
-## Vision
-
-The long-term workflow:
+> In explicit `--engineer` mode, Lunar runs a **bounded autonomous
+> loop**: it plans the change, proposes structured file edits, shows you
+> a diff, asks for approval, applies atomically, runs controlled
+> verification, and — on failure — diagnoses and proposes a fix. Git
+> commit/push and unrestricted network access are **not implemented**.
+> See [Roadmap](#roadmap).
 
 ```text
-USER REQUEST
-     ↓
-UNDERSTAND → PLAN → INSPECT → ACT → OBSERVE → VERIFY
-     ↓
-FIX / ITERATE → COMPLETE
-```
-
-The goal is to be able to say:
-
-```bash
-lunar "fix the authentication bug and make sure all tests pass"
-```
-
-and have Lunar do the work — safely, transparently, and inside your
-existing terminal workflow.
-
-## Current Status (Phase 3 — Autonomous Engineering Loop)
-
-Implemented:
-
-- Everything from Phase 2: multi-turn tool loop with read-only tools
-  (`list_directory`, `read_file`, `search_files`, `find_files`,
-  `git_status`, `git_diff`, `git_log`, `git_branch`), permission
-  system, workspace path security
-- **Structured plans**: the model produces a Zod-validated
-  `EngineeringPlan` (goal + steps) before anything happens; invalid
-  output is a controlled error, not prose
-- **Proposed changes**: the model proposes `FileChange`s
-  (`create`/`update`/`delete` with path, content, reason) as JSON —
-  it never writes files itself
-- **Change validation**: workspace-boundary path checks (traversal,
-  absolute escapes, symlink escapes), existence rules (update/delete
-  must exist, create must not overwrite), `oldContent` conflict
-  detection, per-file and per-proposal size caps
-- **Diff preview**: unified diffs (LCS-based, bounded) shown before
-  any mutation
-- **Mutation approval**: nothing is applied without an explicit human
-  decision (`Apply changes? [y/N]`); `--yes` enables a trusted
-  auto-approve mode; deletes are called out as irreversible
-- **Atomic mutation**: temp file → write → rename; stop-on-first-error;
-  single files only (no directory deletion)
-- **Controlled command execution**: structured `executable + args[]`
-  requests — allowlisted bare executables, no shell, workspace-bound
-  cwd, hard timeouts with process kill, bounded stdout/stderr capture
-- **Test runner**: repository-aware command detection (`npm test`,
-  `cargo test`, `go test ./...`, `pytest`, `make test`), structured
-  results (exit code, pass/fail counts when parseable, duration) with
-  raw output preserved for diagnosis
-- **Verification**: applied changes are confirmed on disk and the test
-  command must pass — a successful file write alone is not success
-- **Failure diagnosis & bounded retry**: on verification failure the
-  model diagnoses (structured, Zod-validated) and proposes a fix that
-  re-enters PROPOSE → VALIDATE → APPROVE → APPLY; the loop stops after
-  `maxIterations` (default 3) — never `while (true)`
-- **Hard limits everywhere**: iterations, mutations per task, command
-  executions, command duration, output size, file size — enforced in
-  code, configurable in `config.json`
-- **Observability**: every phase, approval, mutation, and command
-  execution emits an event (with duration), visible with `--debug`
-
-### Usage
-
-```bash
-lunar "explain this project"           # one-shot Q&A (unchanged)
-lunar "add a health endpoint" --engineer   # autonomous loop (asks before editing)
-lunar "add a health endpoint" --engineer --yes  # trusted mode: no prompts
-```
-
-### The loop
-
-```text
-PLAN → PROPOSE → VALIDATE → PERMISSION → APPLY → DIFF → TEST/VERIFY
-                                                          │
-                              FAIL → DIAGNOSE → FIX ──────┘ (bounded)
-```
-
-### Phase 3 limits (defaults; all configurable)
-
-```text
-maxIterations            3    corrective attempts per task
-maxMutations            20    file writes per task
-maxCommands             10    command executions per task
-commandTimeoutMs   120000    hard kill after 2 minutes
-maxOutputBytes      128000    per stream (stdout/stderr)
-maxFileBytes        262144    per mutated file
-maxChangesPerProposal   10    per proposal
-jsonRetries              2    extra attempts on invalid model JSON
-```
-
-### Tools
-
-| Tool                           | Risk      | Status                              |
-| ------------------------------ | --------- | ----------------------------------- |
-| `list_directory`               | safe      | enabled                             |
-| `read_file`                    | read-only | enabled                             |
-| `file_exists`                  | safe      | enabled                             |
-| `search_files`                 | safe      | enabled                             |
-| `find_files`                   | safe      | enabled                             |
-| `git_status`                   | safe      | enabled                             |
-| `git_diff`                     | read-only | enabled                             |
-| `git_log`                      | safe      | enabled                             |
-| `git_branch`                   | read-only | enabled                             |
-| file create/update/delete      | mutating  | via `--engineer` **after approval** |
-| shell / `run_command`          | dangerous | **not registered** (allowlisted cmds only) |
-| git commit/push/checkout/reset | dangerous | **not implemented**                 |
-
-Mutations are not registered tools the model can call. They are
-structured proposals that pass validation → permission → human
-approval before a single byte is written.
-
-### Phase 3 boundaries (deliberate)
-
-```text
-Lunar can:  inspect the repo, plan, propose edits, apply approved
-            edits atomically, run allowlisted verification commands
-Lunar can't: commit/push git, run arbitrary shell, access the network,
-             delete directories, mutate anything without approval
+Current release: v0.4.0
+Phase: 3 — Autonomous Engineering Loop
 ```
 
 ## Installation
@@ -161,37 +43,182 @@ npm link        # makes `lunar` available on your PATH
 ## Usage
 
 ```bash
-lunar                                # interactive terminal UI
-lunar "explain this project"         # one-shot: answer a single question
+lunar                                      # interactive terminal UI
+lunar "explain this project"               # one-shot: answer a single question
 lunar "add a /health endpoint" --engineer   # autonomous engineering loop
-lunar "add a /health endpoint" --engineer --yes  # trusted mode (no prompts)
-lunar --help                         # usage
-lunar --version                      # version
-lunar --debug                        # verbose diagnostics (timings, args)
-lunar --cwd <path>                   # operate in a different directory
-lunar doctor                         # installation health check
+lunar "add a /health endpoint" --engineer --yes  # trusted mode (see below)
+lunar --help                               # usage
+lunar --version                            # version (v0.4.0)
+lunar --debug                              # verbose diagnostics (timings, args)
+lunar --cwd <path>                         # operate in a different directory
+lunar doctor                               # installation health check
 ```
 
-Example interactive session (Phase 2):
+- `--engineer` activates the bounded engineering loop: plan → propose →
+  validate → approve → apply → verify, with diagnosis and a bounded
+  retry on failure. Lunar asks before touching any file.
+- `--yes` enables trusted auto-approval: permitted mutations are applied
+  without a prompt, while dangerous operations remain denied according
+  to the Phase 3 permission system. It is **not** unrestricted
+  execution.
+
+Example interactive session:
 
 ```text
-lunar › what files are in this project?
+☾ Lunar › what files are in this project?
 
-◐ thinking...
+☾ thinking...
 
 ◇ list_directory
   path: .
 ✓ 12 entries in .
 
-◇ read_file
-  package.json
-
-✓ 51 lines in package.json
-
 Lunar › This is a TypeScript CLI project …
 ```
 
-### Configuration
+## The Lunar Engineering Loop
+
+`--engineer` runs this loop:
+
+```text
+USER REQUEST
+     ↓
+   PLAN
+     ↓
+  PROPOSE
+     ↓
+  VALIDATE
+     ↓
+ PERMISSION
+     ↓
+   APPLY
+     ↓
+DIFF / VERIFY
+     │
+     ├── PASS → COMPLETE
+     │
+     └── FAIL
+          ↓
+       DIAGNOSE
+          ↓
+        FIX
+          ↓
+      VERIFY
+          ↓
+     bounded retry
+```
+
+The safety boundary: nothing reaches disk without passing validation
+and the permission/approval gate, and a task stops after `maxIterations`
+corrective attempts — never `while (true)`.
+
+### Phase 3 limits (defaults; all configurable)
+
+```text
+maxIterations            3    corrective attempts per task
+maxMutations            20    file writes per task
+maxCommands             10    command executions per task
+commandTimeoutMs   120000    hard kill after 2 minutes
+maxOutputBytes      128000    per stream (stdout/stderr)
+maxFileBytes        262144    per mutated file
+maxChangesPerProposal   10    per proposal
+jsonRetries              2    extra attempts on invalid model JSON
+```
+
+## Current Status (Phase 3 — Autonomous Engineering Loop)
+
+Implemented:
+
+- Everything from Phase 2: multi-turn tool loop with read-only tools,
+  permission system, workspace path security
+- **Structured planning**: the model produces a Zod-validated
+  `EngineeringPlan` (goal + steps) before anything happens; invalid
+  output is a controlled error, not prose
+- **Proposed mutations**: the model proposes `FileChange`s
+  (`create`/`update`/`delete` with path, content, reason) as JSON —
+  it never writes files itself
+- **Change validation**: workspace-boundary path checks (traversal,
+  absolute escapes, symlink escapes), existence rules (update/delete
+  must exist, create must not overwrite), `oldContent` conflict
+  detection, per-file and per-proposal size caps
+- **Diff preview**: unified diffs (LCS-based, bounded) shown before
+  any mutation
+- **Mutation approval**: nothing is applied without an explicit human
+  decision (`Apply changes? [y/N]`); `--yes` enables a trusted
+  auto-approve mode; deletes are called out as irreversible
+- **Atomic mutation**: temp file → write → rename; stop-on-first-error;
+  single files only (no directory deletion)
+- **Controlled command execution**: structured `executable + args[]`
+  requests — allowlisted bare executables, no shell, workspace-bound
+  cwd, hard timeouts with process kill, bounded stdout/stderr capture
+- **Repository-aware test runner**: command detection (`npm test`,
+  `cargo test`, `go test ./...`, `pytest`, `make test`), structured
+  results (exit code, pass/fail counts when parseable, duration) with
+  raw output preserved for diagnosis
+- **Verification**: applied changes are confirmed on disk and the test
+  command must pass — a successful file write alone is not success
+- **Failure diagnosis & bounded retry**: on verification failure the
+  model diagnoses (structured, Zod-validated) and proposes a fix that
+  re-enters PROPOSE → VALIDATE → APPROVE → APPLY; the loop stops after
+  `maxIterations` (default 3)
+- **Hard limits everywhere**: iterations, mutations per task, command
+  executions, command duration, output size, file size — enforced in
+  code, configurable in `config.json`
+- **Observability**: every phase, approval, mutation, and command
+  execution emits an event (with duration), visible with `--debug`
+
+### Tools
+
+Read-only tools — callable by the model during any run:
+
+| Tool           | Risk      | Status  |
+| -------------- | --------- | ------- |
+| `list_directory` | safe    | enabled |
+| `read_file`      | read-only | enabled |
+| `file_exists`    | safe    | enabled |
+| `search_files`   | safe    | enabled |
+| `find_files`     | safe    | enabled |
+| `git_status`     | safe    | enabled |
+| `git_diff`       | read-only | enabled |
+| `git_log`        | safe    | enabled |
+| `git_branch`     | read-only | enabled |
+
+Structured engineering proposals — `--engineer` mode only, after
+validation and approval:
+
+| Operation                    | Risk      | Status                                       |
+| ---------------------------- | --------- | -------------------------------------------- |
+| file create/update/delete    | mutating  | via `--engineer` **after approval**          |
+| verification command execution | dangerous | allowlisted executables only, no shell     |
+| shell / `run_command`        | dangerous | **not registered** (allowlisted cmds only)   |
+| git commit/push/checkout/reset | dangerous | **not implemented**                        |
+
+Mutations are not registered tools the model can directly invoke.
+They are structured proposals that pass validation, permission,
+approval, and controlled mutation before touching disk.
+
+### Phase 3 boundaries (deliberate)
+
+```text
+Lunar can:
+- inspect repositories
+- plan engineering work
+- propose changes
+- show diffs
+- apply approved file changes
+- run controlled verification
+- diagnose failures
+- retry within bounded limits
+
+Lunar cannot:
+- perform git commit/push
+- execute arbitrary shell commands
+- access the network autonomously
+- recursively delete directories
+- mutate files without the appropriate permission flow
+```
+
+## Configuration
 
 Configuration is resolved with the following precedence (highest wins):
 
@@ -234,12 +261,17 @@ The optional `engineering` section tunes the Phase 3 loop limits (see
 [Phase 3 limits](#phase-3-limits-defaults-all-configurable)). Unknown
 keys are rejected so typos surface as errors.
 
-API keys belong in your environment or an untracked config file — LunarCLI
-never logs secrets and no keys are committed to this repository.
+The version shown by `lunar --version`, `lunar doctor`, and the CLI
+banners is derived from `package.json` — there is no second hard-coded
+copy.
+
+API keys belong in your environment or an untracked config file —
+LunarCLI never logs secrets and no keys are committed to this
+repository.
 
 ## Architecture
 
-Layered so Phase 1 can add the agent runtime without a rewrite:
+Layered so new phases can be added without a rewrite:
 
 ```text
 src/
@@ -291,71 +323,54 @@ npm run typecheck && npm run lint && npm test && npm run build
 
 ### Security baseline
 
-From Phase 0 onward, these rules hold:
+These rules hold from Phase 0 onward:
 
 - No secrets in logs, code, or the repository
 - No shell execution from user input or model output
-- No LLM shell access, no file modification, no git mutation
 - Every tool execution goes through risk classification and the
   centralized `PermissionManager`; future approvals and sandboxing
-  (safety phase) plug into the same interface
+  (Phase 4) plug into the same interface
+- In Phase 3, file mutation and command execution are only reachable
+  through the validated proposal path — never as direct model tools
 
 ## Roadmap
 
+Phases 0–3 are implemented. The following are **future** phases, not
+implemented capabilities:
+
 ```text
-Phase 0 — Foundation                ✓
-[x] CLI
-[x] Terminal UI
-[x] Configuration
-[x] Workspace detection
-[x] Provider abstraction
-[x] Testing infrastructure
-
-Phase 1 — Agent Core                ✓
-[x] Agent loop
-[x] Context management
-[x] Conversation state
-[x] Provider integration + streaming
-[x] Cancellation
-[x] Tool-call foundation (no execution)
-
-Phase 2 — Engineering Tools        ✓
-[x] Filesystem inspection (list/read/exists)
-[x] Search (text search + file finder)
-[x] Git inspection (status/diff/log/branch)
-[x] Tool-call loop (multi-turn, capped)
-[x] Permission system (risk classification)
-[x] Workspace path security
-
-Phase 3 — Autonomous Loop            ✓
-[x] Structured plan generation (Zod-validated)
-[x] Proposed file changes (create/update/delete)
-[x] Diff preview (unified, bounded)
-[x] Mutation approval (prompt / --yes / deny)
-[x] Atomic file mutation (temp → rename)
-[x] Controlled command execution (allowlist, no shell)
-[x] Repository-aware test runner
-[x] Verification (filesystem + tests)
-[x] Failure diagnosis (structured, re-enters the loop)
-[x] Bounded retry + hard limits
-
-Phase 4 — Safety
+Phase 4 — Safety                          (future)
 [ ] Command risk classification (per-command, not per-executable)
 [ ] Sandboxed execution
 [ ] Interactive permission rules (allowlist per project)
 
-Phase 5 — Memory & Sessions
+Phase 5 — Memory & Sessions               (future)
 [ ] Session persistence
 [ ] Long-term memory
 
-Phase 6 — MCP & Integrations
+Phase 6 — MCP & Integrations              (future)
 [ ] MCP client
 [ ] IDE integration
 [ ] Web research
 
-Phase 7 — Production
+Phase 7 — Production                      (future)
 [ ] Packaging and distribution
 [ ] Hardening and telemetry
+```
+
+Released phases:
+
+```text
+Phase 0 — Foundation                ✓  CLI, UI, config, workspace,
+                                       provider abstraction, tests
+Phase 1 — Agent Core                ✓  Agent loop, context, streaming,
+                                       cancellation, tool-call foundation
+Phase 2 — Engineering Tools        ✓  Read-only tools, tool-call loop,
+                                       permissions, path security
+Phase 3 — Autonomous Loop            ✓  Structured plan, proposed changes,
+                                       diff, approval, atomic mutation,
+                                       controlled commands, test runner,
+                                       verification, bounded retry
 ```
 
 ## Contributing

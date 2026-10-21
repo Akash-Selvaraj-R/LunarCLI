@@ -40,8 +40,8 @@ function renderApp(
 describe('App (initial screen)', () => {
   it('shows the brand header', () => {
     const output = renderApp()
-    expect(output).toContain('◐')
-    expect(output).toContain('LUNARCLI')
+    expect(output).toContain('☾')
+    expect(output).toContain('Lunar')
     expect(output).toContain('AI SOFTWARE ENGINEERING AGENT')
   })
 
@@ -56,7 +56,7 @@ describe('App (initial screen)', () => {
 
   it('shows the prompt line', () => {
     const output = renderApp()
-    expect(output).toContain('lunar')
+    expect(output).toContain('☾ Lunar')
     expect(output).toContain('›')
   })
 
@@ -70,7 +70,9 @@ describe('App (initial screen)', () => {
   it('starts idle — no transcript, no thinking indicator', () => {
     const output = renderApp()
     expect(output).not.toContain('thinking...')
-    expect(output).not.toContain('Lunar ›')
+    // The prompt line renders, but no assistant transcript entry does —
+    // the mock provider's response never appears.
+    expect(output).toContain('☾ Lunar')
     expect(output).not.toContain('Mock response')
   })
 

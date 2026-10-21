@@ -10,13 +10,13 @@ export interface PromptLineProps {
 }
 
 /**
- * The `lunar ›` prompt line with a block cursor.
+ * The `☾ Lunar ›` prompt line with a block cursor.
  */
 export function PromptLine({ value, interactive }: PromptLineProps) {
   return (
     <Box marginTop={1}>
       <Text>
-        {theme.brand('lunar')} {theme.dim('›')} {value}
+        {theme.brand('☾ Lunar')} {theme.dim('›')} {value}
         {interactive ? <Text inverse> </Text> : theme.dim('_')}
       </Text>
     </Box>

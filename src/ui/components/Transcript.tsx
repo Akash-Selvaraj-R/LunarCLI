@@ -20,7 +20,7 @@ export interface TranscriptLineProps {
 /**
  * A single transcript entry.
  *
- * Layout mirrors the Lunar aesthetic: the user speaks at the `lunar ›`
+ * Layout mirrors the Lunar aesthetic: the user speaks at the `☾ Lunar ›`
  * prompt, the model answers as `Lunar ›`, tool activity is a compact
  * `◇ tool` / `✓ result` pair, failures show `✗` plus a hint.
  */
@@ -28,7 +28,7 @@ export function TranscriptLine({ entry }: TranscriptLineProps) {
   if (entry.kind === 'user') {
     return (
       <Text>
-        {theme.brand('lunar')} {theme.dim('›')} {entry.text}
+        {theme.brand('☾ Lunar')} {theme.dim('›')} {entry.text}
       </Text>
     )
   }
@@ -72,13 +72,13 @@ export function TranscriptLine({ entry }: TranscriptLineProps) {
 }
 
 /**
- * The in-flight indicator: `◐ thinking...` while waiting for the model,
+ * The in-flight indicator: `☾ thinking...` while waiting for the model,
  * gone once the first streamed token arrives.
  */
 export function ThinkingLine() {
   return (
     <Text>
-      {theme.brand('◐')} {theme.muted('thinking...')}
+      {theme.brand('☾')} {theme.muted('thinking...')}
     </Text>
   )
 }

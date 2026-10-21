@@ -3,13 +3,14 @@ import { Box, Text } from 'ink'
 import { theme } from '../theme.js'
 
 /**
- * The LunarCLI brand header — a restrained lunar/electric identity.
+ * The Lunar brand header — the crescent mark, restrained and
+ * terminal-native. `☾ Lunar` is the product's single terminal identity.
  */
 export function Header() {
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1}>
+    <Box flexDirection="column">
       <Text>
-        {theme.brand('◐')} {theme.bold('LUNARCLI')}
+        {theme.brand('☾ Lunar')}
       </Text>
       <Text>{theme.muted('AI SOFTWARE ENGINEERING AGENT')}</Text>
     </Box>

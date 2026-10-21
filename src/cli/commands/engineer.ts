@@ -33,11 +33,8 @@ export async function runEngineer(options: EngineerOptions): Promise<number> {
   logger.debug('Engineering run requested', { characters: task.length })
 
   stdout('')
-  stdout(theme.brand('  ╭────────────────────────────────────────────╮'))
-  stdout(theme.brand('  │ LUNAR                                      │'))
-  stdout(theme.brand('  │ Autonomous Engineering Loop                │'))
-  stdout(theme.brand('  ╰────────────────────────────────────────────╯'))
-  stdout(theme.muted(`  v${version}`))
+  stdout(`${theme.brand('☾ Lunar')} ${theme.muted(`v${version}`)}`)
+  stdout(theme.bold('Autonomous Engineering'))
   stdout('')
 
   const render = createRenderer()

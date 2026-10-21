@@ -68,7 +68,8 @@ describe('lunar "<task>" (one-shot mode)', () => {
     const provider = new MockProvider({ response: 'This is a TypeScript project.' })
     const { output, exitCode } = await runOneShot('explain this project', provider)
 
-    expect(output).toContain('LUNARCLI')
+    expect(output).toContain('☾ Lunar')
+    expect(output).toContain('v0.0.0-test')
     expect(output).toContain('workspace')
     expect(output).toContain('~/repo')
     expect(output).toContain('provider')

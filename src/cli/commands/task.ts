@@ -28,7 +28,7 @@ export async function runTask(options: TaskOptions): Promise<void> {
   logger.debug('One-shot task received', { characters: task.length })
 
   stdout('')
-  stdout(`${theme.brand('◐')} ${theme.bold('LUNARCLI')} ${theme.muted(`v${version}`)}`)
+  stdout(`${theme.brand('☾ Lunar')} ${theme.muted(`v${version}`)}`)
   stdout('')
   stdout(infoRow('workspace', theme.text(workspace.name)))
   if (workspace.git.isRepository && workspace.git.branch !== undefined) {
@@ -38,7 +38,7 @@ export async function runTask(options: TaskOptions): Promise<void> {
   stdout(infoRow('model', theme.text(agent.modelId)))
   stdout('')
 
-  stdout(`${theme.brand('◐')} ${theme.muted('thinking...')}`)
+  stdout(`${theme.brand('☾')} ${theme.muted('thinking...')}`)
 
   // Ctrl+C during generation cancels the request instead of crashing.
   const controller = new AbortController()

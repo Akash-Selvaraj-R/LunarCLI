@@ -63,7 +63,7 @@ export function readlineApprover(): ApprovalHandler {
         )
         const out = process.stdout
         out.write('\n')
-        out.write(`${theme.bold('LUNAR wants to modify:')}\n`)
+        out.write(`${theme.bold('☾ Lunar wants to apply these changes.')}\n`)
         for (const line of describeChanges(request.changes)) {
           out.write(`${line}\n`)
         }
@@ -98,7 +98,7 @@ export function readlineApprover(): ApprovalHandler {
         })
         // Closing stdin without input counts as a rejection.
         rl.once('close', () => finish(false))
-        out.write(`${theme.brand('Apply these changes?')} [y/N] `)
+        out.write(`${theme.brand('Apply changes?')} [y/N] `)
       }),
   }
 }

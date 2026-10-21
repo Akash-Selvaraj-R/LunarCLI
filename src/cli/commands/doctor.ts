@@ -21,7 +21,7 @@ export async function runDoctor(options: DoctorOptions): Promise<void> {
   logger.debug('Running doctor', { cwd })
 
   stdout('')
-  stdout(theme.bold('LunarCLI Doctor'))
+  stdout(`${theme.brand('☾ Lunar')} ${theme.muted('Doctor')}`)
   stdout('')
 
   // Node.js

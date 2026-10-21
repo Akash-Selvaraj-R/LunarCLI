@@ -118,7 +118,7 @@ describe('lunar "<task>" --engineer (terminal UX)', () => {
     const { output, exitCode } = await render('Add a health module', provider, passingCommand())
 
     expect(exitCode).toBe(0)
-    expect(output).toContain('Autonomous Engineering Loop')
+    expect(output).toContain('Autonomous Engineering')
     expect(output).toContain('GOAL')
     expect(output).toContain('Add a health module')
     expect(output).toContain('PLAN')

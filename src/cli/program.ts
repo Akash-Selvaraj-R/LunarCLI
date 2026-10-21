@@ -52,7 +52,7 @@ export function buildProgram(version: string, handlers: CliHandlers): Command {
   withGlobalOptions(
     program
       .name('lunar')
-      .description('LunarCLI — AI engineering agent for your terminal.')
+      .description('☾ Lunar — AI engineering agent for your terminal.')
       .version(version, '-V, --version', 'output the version number')
       .argument('[task...]', 'one-shot task for the agent (e.g. lunar "explain this project")'),
     { cwdDefault: process.cwd() },
